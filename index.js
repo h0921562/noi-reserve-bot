@@ -13,11 +13,16 @@ const client = new line.messagingApi.MessagingApiClient({
 
 const app = express();
 
-app.post('/webhook', line.middleware({ channelSecret: config.channelSecret }), (req, res) => {
+// Webhook endpoint
+app.use('/webhook', express.json());
+app.post('/webhook', (req, res) => {
   res.status(200).end();
-  Promise.all(req.body.events.map(handleEvent)).catch(console.error);
+  if (req.body && req.body.events) {
+    Promise.all(req.body.events.map(handleEvent)).catch(console.error);
+  }
 });
 
+// Health check
 app.get('/', (req, res) => res.send('OK'));
 
 const pendingConfirmations = new Map();
@@ -47,7 +52,7 @@ async function handleEvent(event) {
           await pushMessage(userId, '\u4e88\u7d04\u5931\u6557: ' + result.error);
         }
         return;
-      } else if (['\u3044\u3044\u3048','\u3044\u3084','\u3084\u3081\u308b','no','\u3084\u3081','\u306a\u3057','\u30ad\u30e3\u30f3\u30be\u30eb'].includes(cleanText)) {
+      } else if (['\u3044\u3044\u3048','\u3044\u3084','\u3084\u3081\u308b','no','\u3084\u3081','\u306a\u3057','\u30ad\u30e3\u30f3\u30bb\u30eb'].includes(cleanText)) {
         pendingConfirmations.delete(userId);
         await reply(replyToken, '\u30ad\u30e3\u30f3\u30bb\u30eb\u3057\u307e\u3057\u305f');
         return;
@@ -123,11 +128,11 @@ async function handleCancel(replyToken, userId, text) {
   const now = new Date();
   const startDateTime = new Date(parsed.date + 'T' + parsed.startTime + ':00');
   const deadline = new Date(startDateTime.getTime() - 2 * 60 * 60 * 1000);
-  if (now > deadline) { await reply(replyToken, '\u30ad\u30e3\u30f3\u30bb\u30eb\u671f\u9650\u3092\u904e\u304e\u3066\u3044\u307e\u3059\u3002'); return; }
+  if (now > deadline) { await reply(replyToken, '\u30ad\u30e3\u30f3\u30be\u30eb\u671f\u9650\u3092\u904e\u304e\u3066\u3044\u307e\u3059\u3002'); return; }
   await reply(replyToken, '\u30ad\u30e3\u30f3\u30bb\u30eb\u4e2d...');
   const result = await cancelReservation(parsed.date, parsed.startTime);
   if (result.success) await pushMessage(userId, '\u30ad\u30e3\u30f3\u30bb\u30eb\u5b8c\u4e86\u3057\u307e\u3057\u305f');
-  else await pushMessage(userId, '\u30ad\u30e3\u30f3\u30bb\u30eb\u5931\u6557: ' + result.error);
+  else await pushMessage(userId, '\u30ad\u30e3\u30f3\u30be\u30eb\u5931\u6557: ' + result.error);
 }
 
 function zen2han(str) {
@@ -175,4 +180,10 @@ async function reply(replyToken, text) { return client.replyMessage({ replyToken
 async function pushMessage(userId, text) { if (!userId) return; return client.pushMessage({ to: userId, messages: [{ type: 'text', text: text }] }); }
 
 const port = process.env.PORT || 8080;
-app.listen(port, function() { console.log('Server running on port ' + port); });
+app.listen(port, () => {
+  console.log(`Server running on port ${port}`);
+  // 14\u5206\u3054\u3068\u306b\u30bb\u30eb\u30d5ping\u3057\u3066\u30b9\u30ea\u30fc\u30d7\u9632\u6b62
+  setInterval(function() {
+    require('axios').get('https://noi-reserve-bot.onrender.com/').catch(function() {});
+  }, 14 * 60 * 1000);
+});
