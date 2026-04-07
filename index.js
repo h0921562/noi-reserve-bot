@@ -41,7 +41,7 @@ async function handleEvent(event) {
         const result = await makeReservation(info.date, info.startTime, info.endTime, info.roomId);
         if (result.success) {
           const dl = calcCancelDeadline(info.date, info.startTime);
-          const msg = '\u4e88\u7d04\u5b8c\u4e86\n' + info.roomName + ' / ' + info.date + ' ' + info.startTime + '-' + info.endTime + (result.password ? '\n\u30d1\u30b9\u30ef\u30fc\u30c9: ' + result.password : '') + '\n\u30ad\u30e3\u30f3\u30bb\u30eb\u671f\u9650: ' + dl;
+          const msg = '\u4e88\u7d04\u5b8c\u4e86\n' + info.roomName + ' / ' + info.date + ' ' + info.startTime + '-' + info.endTime + (result.password ? '\n\u30d1\u30b9\u30ef\u30fc\u30c9: ' + result.password : '') + '\n\u30ad\u30e3\u30f3\u30be\u30eb\u671f\u9650: ' + dl;
           await pushMessage(userId, msg);
         } else {
           await pushMessage(userId, '\u4e88\u7d04\u5931\u6557: ' + result.error);
@@ -120,34 +120,118 @@ async function handleCancel(replyToken, userId, text) {
   else await pushMessage(userId, '\u30ad\u30e3\u30f3\u30bb\u30eb\u5931\u6557: ' + result.error);
 }
 
-function parseDateTime(text) {
-  var patterns = [
-    /(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\s+(\d{1,2}:\d{2})\s*[-~\u301c]\s*(\d{1,2}:\d{2})/,
-    /(\d{1,2}\/\d{1,2})\s+(\d{1,2}:\d{2})\s*[-~\u301c]\s*(\d{1,2}:\d{2})/,
-    /(\d{1,2}\/\d{1,2})\s+(\d{1,2}:\d{2})/
-  ];
-  for (var i = 0; i < patterns.length; i++) {
-    var match = text.match(patterns[i]);
-    if (match) {
-      var date = match[1], startTime = match[2], endTime = match[3] || addHour(startTime);
-      if (/^\d{1,2}\/\d{1,2}$/.test(date)) {
-        var parts = date.split('/');
-        date = new Date().getFullYear() + '-' + parts[0].padStart(2, '0') + '-' + parts[1].padStart(2, '0');
-      }
-      date = date.replace(/\//g, '-');
-      return { date: date, startTime: padTime(startTime), endTime: padTime(endTime) };
-    }
-  }
-  return null;
+// \u5168\u89d2\u2192\u534a\u89d2\u5909\u63db
+function zen2han(str) {
+  return str.replace(/[\uff10-\uff19]/g, function(s) {
+    return String.fromCharCode(s.charCodeAt(0) - 0xFEE0);
+  }).replace(/[\uff1a\uff0f\uff5e\u30fc]/g, function(s) {
+    return { '\uff1a': ':', '\uff0f': '/', '\uff5e': '~', '\u30fc': '-' }[s] || s;
+  });
 }
 
-function padTime(t) { var p = t.split(':'); return p[0].padStart(2, '0') + ':' + p[1]; }
-function addHour(t) { var p = t.split(':').map(Number); return String(p[0] + 1).padStart(2, '0') + ':' + String(p[1]).padStart(2, '0'); }
-function calcCancelDeadline(date, startTime) { var dt = new Date(date + 'T' + startTime + ':00'); dt.setHours(dt.getHours() - 2); return formatDateTime(dt); }
-function formatDateTime(dt) { return (dt.getMonth() + 1) + '/' + dt.getDate() + ' ' + String(dt.getHours()).padStart(2, '0') + ':' + String(dt.getMinutes()).padStart(2, '0'); }
+// \u6642\u9593\u6587\u5b57\u5217\u3092\u6b63\u898f\u5316\uff0814\u219214:00, 1430\u219214:30, 14:00\u219214:00\uff09
+function normalizeTime(t) {
+  t = t.replace(/[:\s]/g, '');
+  if (t.length <= 2) return t.padStart(2, '0') + ':00';
+  if (t.length === 3) return '0' + t[0] + ':' + t.substring(1);
+  if (t.length === 4) return t.substring(0, 2) + ':' + t.substring(2);
+  return t;
+}
 
-async function reply(replyToken, text) { return client.replyMessage({ replyToken: replyToken, messages: [{ type: 'text', text: text }] }); }
-async function pushMessage(userId, text) { if (!userId) return; return client.pushMessage({ to: userId, messages: [{ type: 'text', text: text }] }); }
+// \u65e5\u6642\u30d1\u30fc\u30b5\u30fc
+function parseDateTime(text) {
+  text = zen2han(text);
+
+  // \u65e5\u4ed8\u90e8\u5206\u3092\u63a2\u3059
+  const datePatterns = [
+    /(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/,
+    /(\d{1,2}\/\d{1,2})/,
+  ];
+
+  // \u6642\u9593\u90e8\u5206\u3092\u63a2\u3059\uff08\u30b3\u30ed\u30f3\u3042\u308a\u30fb\u306a\u3057\u4e21\u5bfe\u5fdc\uff09
+  // 14:00-15:00, 14-15, 1400-1500, 14~1430, 14:00 15:00 etc
+  const timePattern = /(\d{1,4}(?::\d{2})?)\s*[-~\u301c]\s*(\d{1,4}(?::\d{2})?)/;
+  const singleTimePattern = /(\d{1,4}(?::\d{2})?)/;
+
+  let date = null;
+  let remaining = text;
+
+  for (const dp of datePatterns) {
+    const dateMatch = text.match(dp);
+    if (dateMatch) {
+      date = dateMatch[1];
+      remaining = text.substring(dateMatch.index + dateMatch[0].length).trim();
+      break;
+    }
+  }
+
+  if (!date) return null;
+
+  // \u6642\u9593\u7bc4\u56f2\u3092\u63a2\u3059
+  let startTime, endTime;
+  const rangeMatch = remaining.match(timePattern);
+  if (rangeMatch) {
+    startTime = normalizeTime(rangeMatch[1]);
+    endTime = normalizeTime(rangeMatch[2]);
+  } else {
+    const singleMatch = remaining.match(singleTimePattern);
+    if (singleMatch) {
+      startTime = normalizeTime(singleMatch[1]);
+      endTime = addHour(startTime);
+    } else {
+      return null;
+    }
+  }
+
+  // \u6708/\u65e5 \u2192 YYYY-MM-DD
+  if (date.match(/^\d{1,2}\/\d{1,2}$/)) {
+    const [m, d] = date.split('/');
+    const year = new Date().getFullYear();
+    date = year + '-' + m.padStart(2, '0') + '-' + d.padStart(2, '0');
+  }
+  date = date.replace(/\//g, '-');
+
+  return { date: date, startTime: startTime, endTime: endTime };
+}
+
+function padTime(t) {
+  const [h, m] = t.split(':');
+  return h.padStart(2, '0') + ':' + m;
+}
+
+function addHour(time) {
+  const parts = time.split(':').map(Number);
+  return String(parts[0] + 1).padStart(2, '0') + ':' + String(parts[1]).padStart(2, '0');
+}
+
+function calcCancelDeadline(date, startTime) {
+  const dt = new Date(`${date}T${startTime}:00`);
+  dt.setHours(dt.getHours() - 2);
+  return formatDateTime(dt);
+}
+
+function formatDateTime(dt) {
+  const m = dt.getMonth() + 1;
+  const d = dt.getDate();
+  const h = String(dt.getHours()).padStart(2, '0');
+  const min = String(dt.getMinutes()).padStart(2, '0');
+  return `${m}/${d} ${h}:${min}`;
+}
+
+async function reply(replyToken, text) {
+  return client.replyMessage({
+    replyToken,
+    messages: [{ type: 'text', text }],
+  });
+}
+
+async function pushMessage(userId, text) {
+  if (!userId) return;
+  return client.pushMessage({
+    to: userId,
+    messages: [{ type: 'text', text }],
+  });
+}
 
 const port = process.env.PORT || 8080;
-app.listen(port, function() { console.log('Server running on port ' + port); });
+app.listen(port, () => console.log(`Server running on port ${port}`));
