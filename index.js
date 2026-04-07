@@ -34,96 +34,96 @@ async function handleEvent(event) {
   const cleanText = text.replace(/@\S+\s*/g, '').trim();
   try {
     if (pendingConfirmations.has(userId)) {
-      if (['ok','OK','ã¯ã','ãã','ãë','yes'].includes(cleanText)) {
+      if (['ok','OK','\u306f\u3044','\u3046\u3093','\u304ak','yes'].includes(cleanText)) {
         const info = pendingConfirmations.get(userId);
         pendingConfirmations.delete(userId);
-        await reply(replyToken, 'äºç´ä¸­...');
+        await reply(replyToken, '\u4e88\u7d04\u4e2d...');
         const result = await makeReservation(info.date, info.startTime, info.endTime, info.roomId);
         if (result.success) {
           const dl = calcCancelDeadline(info.date, info.startTime);
-          const msg = 'äºç´å®äº\n' + info.roomName + ' / ' + info.date + ' ' + info.startTime + '-' + info.endTime + (result.password ? '\nãã¹ã¯ã¼ã: ' + result.password : '') + '\nã­ã£ã³ã»ã«æé: ' + dl;
+          const msg = '\u4e88\u7d04\u5b8c\u4e86\n' + info.roomName + ' / ' + info.date + ' ' + info.startTime + '-' + info.endTime + (result.password ? '\n\u30d1\u30b9\u30ef\u30fc\u30c9: ' + result.password : '') + '\n\u30ad\u30e3\u30f3\u30bb\u30eb\u671f\u9650: ' + dl;
           await pushMessage(userId, msg);
         } else {
-          await pushMessage(userId, 'äºç´å¤±æ: ' + result.error);
+          await pushMessage(userId, '\u4e88\u7d04\u5931\u6557: ' + result.error);
         }
         return;
       } else {
         pendingConfirmations.delete(userId);
-        await reply(replyToken, 'ã­ã£ã³ã»ã«ãã¾ãã');
+        await reply(replyToken, '\u30ad\u30e3\u30f3\u30be\u30eb\u3057\u307e\u3057\u305f');
         return;
       }
     }
-    if (cleanText === 'äºç´ä¸è¦§' || cleanText === 'ä¸è¦¥') {
+    if (cleanText === '\u4e88\u7d04\u4e00\u89a7' || cleanText === '\u4e00\u89a7') {
       await handleList(replyToken, userId);
-    } else if (cleanText.startsWith('åæ¶') || cleanText.startsWith('ã­ã£ã³ã»ã«')) {
+    } else if (cleanText.startsWith('\u53d6\u6d88') || cleanText.startsWith('\u30ad\u30e3\u30f3\u30bb\u30eb')) {
       await handleCancel(replyToken, userId, cleanText);
-    } else if (cleanText.startsWith('ç©ºã')) {
+    } else if (cleanText.startsWith('\u7a7a\u304d')) {
       await handleCheckOnly(replyToken, userId, cleanText);
     } else {
       await handleReserve(replyToken, userId, cleanText);
     }
   } catch (err) {
     console.error('Error handling event:', err);
-    await reply(replyToken, 'ã¨ã©ã¼ãçºçãã¾ãããããä¸åº¦ãè©¦ããã ããã').catch(function(){});
+    await reply(replyToken, '\u30a8\u30e9\u30fc\u304c\u767a\u751f\u3057\u307e\u3057\u305f\u3002\u3082\u3046\u4e00\u5ea6\u304a\u8a66\u3057\u304f\u3060\u3055\u3044\u3002').catch(function(){});
   }
 }
 
 async function handleReserve(replyToken, userId, text) {
   const parsed = parseDateTime(text);
-  if (!parsed) { await reply(replyToken, 'æ¥æãèªè­ã§ãã¾ããã§ããã\nä¾: 4/10 14:00-15:00'); return; }
+  if (!parsed) { await reply(replyToken, '\u65e5\u6642\u3092\u8a8d\u8b58\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002\n\u4f8b: 4/10 14:00-15:00'); return; }
   const date = parsed.date, startTime = parsed.startTime, endTime = parsed.endTime;
-  await reply(replyToken, date + ' ' + startTime + '-' + endTime + ' ã®ç©ºãç¶æ³ãç¢ºèªä¸­...');
+  await reply(replyToken, date + ' ' + startTime + '-' + endTime + ' \u306e\u7a7a\u304d\u72b6\u6cc1\u3092\u78ba\u8a8d\u4e2d...');
   const availability = await checkAvailability(date, startTime, endTime);
   const room6 = availability.rooms.find(function(r) { return r.id === '42'; });
   const room4 = availability.rooms.find(function(r) { return r.id === '25'; });
   var selectedRoom = null;
   if (room6.available) selectedRoom = room6;
   else if (room4.available) selectedRoom = room4;
-  if (!selectedRoom) { await pushMessage(userId, date + ' ' + startTime + '-' + endTime + ' ã¯ä¸¡æ¹ã®ä¼è­°å®¤ãåã¾ã£ã¦ãã¾ãã'); return; }
+  if (!selectedRoom) { await pushMessage(userId, date + ' ' + startTime + '-' + endTime + ' \u306f\u4e21\u65b9\u306e\u4f1a\u8b70\u5ba4\u304c\u57cb\u307e\u3063\u3066\u3044\u307e\u3059\u3002'); return; }
   const dl = calcCancelDeadline(date, startTime);
   pendingConfirmations.set(userId, { date: date, startTime: startTime, endTime: endTime, roomId: selectedRoom.id, roomName: selectedRoom.name });
   setTimeout(function() { pendingConfirmations.delete(userId); }, 5 * 60 * 1000);
-  const msg = selectedRoom.name + ' ãç©ºãã¦ãã¾ã\næ¥æ: ' + date + ' ' + startTime + '-' + endTime + '\nã­ã£ã³ã»ã«æé: ' + dl + '\n\näºç´ãã¾ããï¼ï¼OK / ãããï¼';
+  const msg = selectedRoom.name + ' \u304c\u7a7a\u3044\u3066\u3044\u307e\u3059\n\u65e5\u6642: ' + date + ' ' + startTime + '-' + endTime + '\n\u30ad\u30e3\u30f3\u30bb\u30eb\u671f\u9650: ' + dl + '\n\n\u4e88\u7d04\u3057\u307e\u3059\u304b\uff1f\uff08OK / \u3044\u3044\u3048\uff09';
   await pushMessage(userId, msg);
 }
 
 async function handleCheckOnly(replyToken, userId, text) {
-  const cleaned = text.replace(/^ç©ºã\s*/, '');
+  const cleaned = text.replace(/^\u7a7a\u304d\s*/, '');
   const parsed = parseDateTime(cleaned);
-  if (!parsed) { await reply(replyToken, 'æ¥æãèªè­ã§ãã¾ããã§ããã\nä¾: ç©ºã 4/10 14:00-15:00'); return; }
+  if (!parsed) { await reply(replyToken, '\u65e5\u6642\u3092\u8a8d\u8b58\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002\n\u4f8b: \u7a7a\u304d 4/10 14:00-15:00'); return; }
   const date = parsed.date, startTime = parsed.startTime, endTime = parsed.endTime;
-  await reply(replyToken, date + ' ' + startTime + '-' + endTime + ' ã®ç©ºãç¶æ³ãç¢ºèªä¸­...');
+  await reply(replyToken, date + ' ' + startTime + '-' + endTime + ' \u306e\u7a7a\u304d\u72b6\u6cc1\u3092\u78ba\u8a8d\u4e2d...');
   const availability = await checkAvailability(date, startTime, endTime);
-  var lines = availability.rooms.map(function(r) { return r.name + ': ' + (r.available ? 'ç©ºã' : 'åã¾ã'); });
+  var lines = availability.rooms.map(function(r) { return r.name + ': ' + (r.available ? '\u7a7a\u304d' : '\u57cb\u307e\u308a'); });
   await pushMessage(userId, date + ' ' + startTime + '-' + endTime + '\n' + lines.join('\n'));
 }
 
 async function handleList(replyToken, userId) {
-  await reply(replyToken, 'äºç´ä¸è¦§ãåå¾ä¸­...');
+  await reply(replyToken, '\u4e88\u7d04\u4e00\u89a7\u3092\u53d6\u5f97\u4e2d...');
   const reservations = await getReservations();
-  if (reservations.length === 0) { await pushMessage(userId, 'ç¾å¨ã®äºç´ã¯ããã¾ãã'); return; }
+  if (reservations.length === 0) { await pushMessage(userId, '\u73fe\u5728\u306e\u4e88\u7d04\u306f\u3042\u308a\u307e\u305b\u3093'); return; }
   var lines = reservations.map(function(r) { return r.date + ' ' + r.time + '\n' + r.room + ' PW:' + r.password; });
-  await pushMessage(userId, 'äºç´ä¸è¦§\n\n' + lines.join('\n\n'));
+  await pushMessage(userId, '\u4e88\u7d04\u4e00\u89a7\n\n' + lines.join('\n\n'));
 }
 
 async function handleCancel(replyToken, userId, text) {
-  const cleaned = text.replace(/^(åæ¶|ã­ã£ã³ã»ã«)\s*/, '');
+  const cleaned = text.replace(/^(\u53d6\u6d88|\u30ad\u30e3\u30f3\u30bb\u30eb)\s*/, '');
   const parsed = parseDateTime(cleaned);
-  if (!parsed) { await reply(replyToken, 'æ¥æãèªè­ã§ãã¾ããã§ããã\nä¾: åæ¶ 4/10 14:00'); return; }
+  if (!parsed) { await reply(replyToken, '\u65e5\u6642\u3092\u8a8d\u8b58\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002\n\u4f8b: \u53d6\u6d88 4/10 14:00'); return; }
   const now = new Date();
   const startDateTime = new Date(parsed.date + 'T' + parsed.startTime + ':00');
   const deadline = new Date(startDateTime.getTime() - 2 * 60 * 60 * 1000);
-  if (now > deadline) { await reply(replyToken, 'ã­ã£ã³ã»ã«æéãéãã¦ãã¾ãã'); return; }
-  await reply(replyToken, 'ã­ã£ã³ã»ã«ä¸­...');
+  if (now > deadline) { await reply(replyToken, '\u30ad\u30e3\u30f3\u30bb\u30eb\u671f\u9650\u3092\u904e\u304e\u3066\u3044\u307e\u3059\u3002'); return; }
+  await reply(replyToken, '\u30ad\u30e3\u30f3\u30bb\u30eb\u4e2d...');
   const result = await cancelReservation(parsed.date, parsed.startTime);
-  if (result.success) await pushMessage(userId, 'ã­ã£ã³ã»ã«å®äºãã¾ãã');
-  else await pushMessage(userId, 'ã­ã£ã³ã»ã«å¤±æ: ' + result.error);
+  if (result.success) await pushMessage(userId, '\u30ad\u30e3\u30f3\u30bb\u30eb\u5b8c\u4e86\u3057\u307e\u3057\u305f');
+  else await pushMessage(userId, '\u30ad\u30e3\u30f3\u30bb\u30eb\u5931\u6557: ' + result.error);
 }
 
 function parseDateTime(text) {
   var patterns = [
-    /(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\s+(\d{1,2}:\d{2})\s*[-~ã]\s*(\d{1,2}:\d{2})/,
-    /(\d{1,2}\/\d{1,2})\s+(\d{1,2}:\d{2})\s*[-~ã]\s*(\d{1,2}:\d{2})/,
+    /(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})\s+(\d{1,2}:\d{2})\s*[-~\u301c]\s*(\d{1,2}:\d{2})/,
+    /(\d{1,2}\/\d{1,2})\s+(\d{1,2}:\d{2})\s*[-~\u301c]\s*(\d{1,2}:\d{2})/,
     /(\d{1,2}\/\d{1,2})\s+(\d{1,2}:\d{2})/
   ];
   for (var i = 0; i < patterns.length; i++) {
