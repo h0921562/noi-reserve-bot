@@ -35,11 +35,10 @@ async function handleEvent(event) {
   const userId = event.source.userId;
   const replyToken = event.replyToken;
 
-  // グループの場合はメンションされてるかチェック
+  // グループの場合はメンションされてるかチェック（確認待ちユーザーは除く）
   if (event.source.type === 'group' || event.source.type === 'room') {
-    // メンションがない場合は無視（@ノイbot を含むか、先頭が@で始まるか）
     const mention = event.message.mention;
-    if (!mention && !text.startsWith('@')) return;
+    if (!mention && !text.startsWith('@') && !pendingConfirmations.has(userId)) return;
   }
 
   // メンション部分を除去
