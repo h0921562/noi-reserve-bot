@@ -67,6 +67,42 @@ async function handleEvent(event) {
           await pushMessage(userId, `予約失敗: ${result.error}`);
         }
         return;
+      } else if (/(?:4\s*(?:階|かい|カイ|f|F)|よん\s*(?:階|かい|カイ)|よんかい|４\s*(?:階|かい|カイ|f|F))/.test(cleanText)) {
+        const info = pendingConfirmations.get(userId);
+        if (info.roomId === '25') {
+          await reply(replyToken, 'すでに4階で提案しています。予約しますか？（OK / いいえ）');
+          return;
+        }
+        const availability = await checkAvailability(info.date, info.startTime, info.endTime);
+        const room4 = availability.rooms.find(r => r.id === '25');
+        if (room4 && room4.available) {
+          info.roomId = room4.id;
+          info.roomName = room4.name;
+          pendingConfirmations.set(userId, info);
+          const cancelDeadline = calcCancelDeadline(info.date, info.startTime);
+          await reply(replyToken, `${room4.name}に変更します\n日時: ${info.date} ${info.startTime}-${info.endTime}\nキャンセル期限: ${cancelDeadline}\n\n予約しますか？（OK / いいえ）`);
+        } else {
+          await reply(replyToken, '4階は埋まっています。6階で予約しますか？（OK / いいえ）');
+        }
+        return;
+      } else if (/(?:6\s*(?:階|かい|カイ|f|F)|ろく\s*(?:階|かい|カイ)|ろっかい|ろくかい|６\s*(?:階|かい|カイ|f|F))/.test(cleanText)) {
+        const info = pendingConfirmations.get(userId);
+        if (info.roomId === '42') {
+          await reply(replyToken, 'すでに6階で提案しています。予約しますか？（OK / いいえ）');
+          return;
+        }
+        const availability = await checkAvailability(info.date, info.startTime, info.endTime);
+        const room6 = availability.rooms.find(r => r.id === '42');
+        if (room6 && room6.available) {
+          info.roomId = room6.id;
+          info.roomName = room6.name;
+          pendingConfirmations.set(userId, info);
+          const cancelDeadline = calcCancelDeadline(info.date, info.startTime);
+          await reply(replyToken, `${room6.name}に変更します\n日時: ${info.date} ${info.startTime}-${info.endTime}\nキャンセル期限: ${cancelDeadline}\n\n予約しますか？（OK / いいえ）`);
+        } else {
+          await reply(replyToken, '6階は埋まっています。4階で予約しますか？（OK / いいえ）');
+        }
+        return;
       } else if (/^(いいえ|いや|やめる|no|やめ|なし|キャンセル|やめとく|やっぱ|やっぱり)/.test(cleanText) || /(?:キャンセル|やめ|いらない|なし|けし|消し|消す|消して|とりけし)/.test(cleanText)) {
         pendingConfirmations.delete(userId);
         await reply(replyToken, 'キャンセルしました');
@@ -109,15 +145,18 @@ async function handleReserve(replyToken, userId, text) {
 
   const availability = await checkAvailability(date, startTime, endTime);
 
-  // 6階優先
   const room6 = availability.rooms.find(r => r.id === '42');
   const room4 = availability.rooms.find(r => r.id === '25');
 
+  // 階数指定があればそちらを優先、なければ6階優先
+  const prefer4 = /(?:4\s*(?:階|かい|カイ|f|F)|よん\s*(?:階|かい|カイ)|よんかい|４\s*(?:階|かい|カイ|f|F))/.test(text);
   let selectedRoom = null;
-  if (room6.available) {
-    selectedRoom = room6;
-  } else if (room4.available) {
-    selectedRoom = room4;
+  if (prefer4) {
+    if (room4.available) selectedRoom = room4;
+    else if (room6.available) selectedRoom = room6;
+  } else {
+    if (room6.available) selectedRoom = room6;
+    else if (room4.available) selectedRoom = room4;
   }
 
   if (!selectedRoom) {
