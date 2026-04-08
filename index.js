@@ -67,7 +67,7 @@ async function handleEvent(event) {
           await pushMessage(userId, `予約失敗: ${result.error}`);
         }
         return;
-      } else if (/(?:4\s*(?:階|かい|カイ|f|F)|よん\s*(?:階|かい|カイ)|よんかい|４\s*(?:階|かい|カイ|f|F))/.test(cleanText)) {
+      } else if (/(?:^[4４]$|4\s*(?:階|かい|カイ|f|F)|よん\s*(?:階|かい|カイ)|よんかい|４\s*(?:階|かい|カイ|f|F))/.test(cleanText)) {
         const info = pendingConfirmations.get(userId);
         if (info.roomId === '25') {
           await reply(replyToken, 'すでに4階で提案しています。予約しますか？（OK / いいえ）');
@@ -85,7 +85,7 @@ async function handleEvent(event) {
           await reply(replyToken, '4階は埋まっています。6階で予約しますか？（OK / いいえ）');
         }
         return;
-      } else if (/(?:6\s*(?:階|かい|カイ|f|F)|ろく\s*(?:階|かい|カイ)|ろっかい|ろくかい|６\s*(?:階|かい|カイ|f|F))/.test(cleanText)) {
+      } else if (/(?:^[6６]$|6\s*(?:階|かい|カイ|f|F)|ろく\s*(?:階|かい|カイ)|ろっかい|ろくかい|６\s*(?:階|かい|カイ|f|F))/.test(cleanText)) {
         const info = pendingConfirmations.get(userId);
         if (info.roomId === '42') {
           await reply(replyToken, 'すでに6階で提案しています。予約しますか？（OK / いいえ）');
