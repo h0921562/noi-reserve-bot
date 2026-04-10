@@ -131,8 +131,9 @@ async function handleMinutesText(userId, text, pushFn) {
 async function generateMinutes(userId, session, pushFn) {
   await pushFn(userId, '議事録を作成中...');
   try {
-    var prompt = '以下は会議の文字起こしです。議事録としてまとめてください。\n\n## 要件\n- 会議名: ' + (session.title || '会議') +
-      '\n- 構成: 1.参加者 2.議題 3.議論の要点 4.決定事項 5.TODO 6.次回予定\n\n## 文字起こし\n' + session.transcript;
+    var prompt = '以下は会議の文字起こしです。議事録としてまとめてください。\n\n## 要件\n' +
+      '- 最初の行に「YYYY-MM-DD 相手の会社名」形式でタイトルを書いてください（会議の日付と相手先の会社名を文字起こしから判断してください。日付が不明な場合は今日の日付を使ってください）\n' +
+      '- タイトルの後に以下の構成でまとめる:\n  1. 参加者 2. 議題 3. 議論の要点 4. 決定事項 5. TODO 6. 次回予定\n\n## 文字起こし\n' + session.transcript;
     if (session.additionalInfo.length > 0) prompt += '\n\n## 追加情報\n' + session.additionalInfo.join('\n');
 
     var response = await getAnthropic().messages.create({
@@ -142,8 +143,13 @@ async function generateMinutes(userId, session, pushFn) {
     var minutes = '';
     for (var b of response.content) { if (b.type === 'text') { minutes = b.text; break; } }
 
-    var dateStr = new Date().toISOString().split('T')[0];
-    var docTitle = dateStr + ' ' + (session.title || '会議');
+    // 最初の行からタイトルを抽出
+    var firstLine = minutes.split('\n').find(function(l) { return l.trim().length > 0; }) || '';
+    var docTitle = firstLine.replace(/^#+\s*/, '').trim();
+    // タイトルが長すぎる場合や日付がない場合のフォールバック
+    if (docTitle.length > 50 || docTitle.length < 3) {
+      docTitle = new Date().toISOString().split('T')[0] + ' 会議';
+    }
     var docResult = await createGoogleDoc(docTitle, minutes);
 
     session.phase = 'editing';
