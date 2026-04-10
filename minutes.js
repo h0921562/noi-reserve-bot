@@ -68,7 +68,7 @@ async function handleAudioMessage(event, channelAccessToken, pushFn, replyFn) {
     minutesSessions.set(userId, {
       transcript: text, additionalInfo: [], title: '', phase: 'collecting',
       minutes: null, docUrl: null, docId: null, docTitle: null,
-      timer: setTimeout(function() { minutesSessions.delete(userId); }, 600000),
+      timer: setTimeout(function() { minutesSessions.delete(userId); }, 3600000),
     });
 
     await pushFn(userId,
@@ -110,7 +110,7 @@ async function handleMinutesText(userId, text, pushFn) {
       var docResult = await createGoogleDoc(session.docTitle, revised);
       if (docResult.url) { session.docUrl = docResult.url; session.docId = docResult.id; }
       clearTimeout(session.timer);
-      session.timer = setTimeout(function() { minutesSessions.delete(userId); }, 1800000);
+      session.timer = setTimeout(function() { minutesSessions.delete(userId); }, 3600000);
       await pushFn(userId, (session.docUrl ? '修正しました\n' + session.docUrl : '修正しました') + '\n\n他に修正があれば送ってください。完了なら「OK」。');
     } catch (err) {
       await pushFn(userId, '修正失敗: ' + err.message);
@@ -157,7 +157,7 @@ async function generateMinutes(userId, session, pushFn) {
     session.docTitle = docTitle;
     session.docUrl = docResult.url || null;
     clearTimeout(session.timer);
-    session.timer = setTimeout(function() { minutesSessions.delete(userId); }, 1800000);
+    session.timer = setTimeout(function() { minutesSessions.delete(userId); }, 3600000);
 
     if (docResult.url) {
       await pushFn(userId, '議事録が完成しました\n' + docTitle + '\n' + docResult.url + '\n\n修正があればそのまま送ってください。完了なら「OK」。');
