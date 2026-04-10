@@ -43,13 +43,30 @@ const pendingConfirmations = new Map();
 async function handleEvent(event) {
   if (event.type !== 'message') return;
 
-  // 音声メッセージ → 議事録機能
-  if (event.message.type === 'audio') {
+  // デバッグ: 全メッセージタイプをログ
+  const uid = event.source && event.source.userId;
+  console.log('Event received:', event.message.type, 'from:', uid);
+
+  // 音声・動画メッセージ → 議事録機能
+  if (event.message.type === 'audio' || event.message.type === 'video') {
     await handleAudioMessage(event, config.channelAccessToken, pushMessage, reply);
     return;
   }
 
-  if (event.message.type !== 'text') return;
+  // ファイルメッセージ（m4aファイルを直接送った場合）
+  if (event.message.type === 'file') {
+    const fname = event.message.fileName || '';
+    if (/\.(m4a|mp3|wav|ogg|mp4|aac|flac|webm)$/i.test(fname)) {
+      await handleAudioMessage(event, config.channelAccessToken, pushMessage, reply);
+      return;
+    }
+  }
+
+  if (event.message.type !== 'text') {
+    // 未対応のメッセージタイプをデバッグ通知
+    if (uid) await pushMessage(uid, 'メッセージタイプ: ' + event.message.type).catch(() => {});
+    return;
+  }
 
   const text = event.message.text.trim();
   const userId = event.source.userId;
