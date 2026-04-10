@@ -23,25 +23,32 @@ async function handleAudioMessage(event, channelAccessToken, pushFn, replyFn) {
     // reply即応答
     await replyFn(event.replyToken, '音声を受信しました。処理中...').catch(e => console.log('reply failed:', e.message));
 
-    // 5秒待ってからダウンロード（LINE側の変換待ち）
-    await new Promise(r => setTimeout(r, 5000));
-
-    // ダウンロード
+    // ダウンロード（202の場合リトライ、最大60秒）
     const url = 'https://api-data.line.me/v2/bot/message/' + messageId + '/content';
-    console.log('Downloading:', url);
-    const resp = await axios.get(url, {
-      headers: { 'Authorization': 'Bearer ' + channelAccessToken },
-      responseType: 'arraybuffer',
-      validateStatus: function() { return true; },
-    });
-    console.log('Download status:', resp.status, 'size:', resp.data ? resp.data.length : 0);
-
-    if (resp.status !== 200 || !resp.data || resp.data.length === 0) {
-      await pushFn(userId, 'ダウンロード失敗: status=' + resp.status + ' size=' + (resp.data ? resp.data.length : 0));
+    let audioBuffer = null;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await new Promise(r => setTimeout(r, attempt === 0 ? 3000 : 8000));
+      console.log('Download attempt', attempt + 1, url);
+      const resp = await axios.get(url, {
+        headers: { 'Authorization': 'Bearer ' + channelAccessToken },
+        responseType: 'arraybuffer',
+        validateStatus: function() { return true; },
+      });
+      console.log('status:', resp.status, 'size:', resp.data ? resp.data.length : 0);
+      if (resp.status === 200 && resp.data && resp.data.length > 0) {
+        audioBuffer = Buffer.from(resp.data);
+        break;
+      }
+      if (resp.status !== 202) {
+        await pushFn(userId, 'ダウンロード失敗: status=' + resp.status);
+        return;
+      }
+    }
+    if (!audioBuffer) {
+      await pushFn(userId, 'ダウンロード失敗: タイムアウト（音声変換に時間がかかっています。少し待ってから再送してください）');
       return;
     }
 
-    const audioBuffer = Buffer.from(resp.data);
     await pushFn(userId, 'ダウンロード完了: ' + audioBuffer.length + 'bytes\n文字起こし中...');
 
     // 一時ファイルに保存してWhisper APIへ
