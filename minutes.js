@@ -52,7 +52,9 @@ async function transcribe(audioBuffer, contentType) {
   // OpenAI Whisper APIはファイル名の拡張子でフォーマットを判定する
   const tmpPath = path.join(os.tmpdir(), 'audio_' + Date.now() + '.m4a');
   fs.writeFileSync(tmpPath, audioBuffer);
-  console.log('Audio saved:', tmpPath, 'size:', audioBuffer.length, 'contentType:', contentType);
+  // ファイルの先頭バイトをログ（フォーマット判定用）
+  const header = audioBuffer.slice(0, 12).toString('hex');
+  console.log('Audio saved:', tmpPath, 'size:', audioBuffer.length, 'contentType:', contentType, 'header:', header);
 
   try {
     const resp = await getOpenAI().audio.transcriptions.create({
@@ -223,7 +225,8 @@ async function handleAudioMessage(event, channelAccessToken, pushMessageFn, repl
     const detail = err.response ? JSON.stringify(err.response.data).substring(0, 200) : err.message;
     const { buffer: ab, contentType: ct } = await downloadAudio(messageId, channelAccessToken).catch(() => ({ buffer: null, contentType: 'unknown' }));
     const size = ab ? ab.length : 'unknown';
-    await pushMessageFn(userId, '文字起こしに失敗しました: ' + detail + '\n[contentType: ' + ct + ', size: ' + size + ']');
+    const hdr = ab ? ab.slice(0, 8).toString('hex') : 'unknown';
+    await pushMessageFn(userId, '失敗: ' + detail + '\ntype:' + ct + ' size:' + size + ' hdr:' + hdr);
   }
 }
 
