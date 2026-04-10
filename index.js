@@ -1,6 +1,7 @@
 const express = require('express');
 const line = require('@line/bot-sdk');
 const { checkAvailability, makeReservation, getReservations, cancelReservation } = require('./reserve');
+const { handleAudioMessage, handleMinutesText } = require('./minutes');
 
 const config = {
   channelSecret: process.env.LINE_CHANNEL_SECRET,
@@ -29,7 +30,15 @@ app.get('/', (req, res) => res.send('OK'));
 const pendingConfirmations = new Map();
 
 async function handleEvent(event) {
-  if (event.type !== 'message' || event.message.type !== 'text') return;
+  if (event.type !== 'message') return;
+
+  // 音声メッセージ → 議事録機能
+  if (event.message.type === 'audio') {
+    await handleAudioMessage(event, config.channelAccessToken, pushMessage);
+    return;
+  }
+
+  if (event.message.type !== 'text') return;
 
   const text = event.message.text.trim();
   const userId = event.source.userId;
@@ -112,6 +121,10 @@ async function handleEvent(event) {
         return;
       }
     }
+
+    // 議事録セッション中のテキスト処理
+    const handled = await handleMinutesText(userId, cleanText, pushMessage);
+    if (handled) return;
 
     // コマンド分岐
     if (/^(予約一覧|一覧|予約みせて|予約見せて|予約ある|予約確認|リスト)/.test(cleanText)) {
