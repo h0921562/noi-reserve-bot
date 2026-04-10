@@ -31,7 +31,8 @@ async function downloadAudio(messageId, channelAccessToken) {
 
 // Whisper APIで文字起こし
 async function transcribe(audioBuffer) {
-  const file = new File([audioBuffer], 'audio.m4a', { type: 'audio/m4a' });
+  const { toFile } = require('openai');
+  const file = await toFile(audioBuffer, 'audio.m4a', { type: 'audio/m4a' });
   const resp = await openai.audio.transcriptions.create({
     model: 'whisper-1',
     file: file,
@@ -156,7 +157,7 @@ async function generateMinutes(userId, session, pushMessageFn) {
 }
 
 // 音声メッセージ受信時
-async function handleAudioMessage(event, channelAccessToken, pushMessageFn) {
+async function handleAudioMessage(event, channelAccessToken, pushMessageFn, replyFn) {
   const userId = event.source.userId;
   const messageId = event.message.id;
 
@@ -165,7 +166,10 @@ async function handleAudioMessage(event, channelAccessToken, pushMessageFn) {
     minutesSessions.delete(userId);
   }
 
-  await pushMessageFn(userId, '音声を受信しました。文字起こし中...');
+  // まずreplyで即応答（replyTokenは1回しか使えない）
+  if (replyFn) {
+    await replyFn(event.replyToken, '音声を受信しました。文字起こし中...').catch(() => {});
+  }
 
   try {
     const audioBuffer = await downloadAudio(messageId, channelAccessToken);

@@ -34,7 +34,7 @@ async function handleEvent(event) {
 
   // 音声メッセージ → 議事録機能
   if (event.message.type === 'audio') {
-    await handleAudioMessage(event, config.channelAccessToken, pushMessage);
+    await handleAudioMessage(event, config.channelAccessToken, pushMessage, reply);
     return;
   }
 
