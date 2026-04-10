@@ -218,11 +218,12 @@ async function handleAudioMessage(event, channelAccessToken, pushMessageFn, repl
 
   // まずreplyで即応答（replyTokenは1回しか使えない）
   if (replyFn) {
-    await replyFn(event.replyToken, '音声を受信しました。文字起こし中...').catch(() => {});
+    await replyFn(event.replyToken, '音声を受信しました。ダウンロード中...').catch(() => {});
   }
 
   try {
     const { buffer: audioBuffer, contentType } = await downloadAudio(messageId, channelAccessToken);
+    await pushMessageFn(userId, 'ダウンロード完了: ' + audioBuffer.length + 'bytes, type:' + contentType + '\n文字起こし中...');
     const transcript = await transcribe(audioBuffer, contentType);
 
     const session = {
