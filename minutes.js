@@ -1,9 +1,21 @@
 const axios = require('axios');
-const OpenAI = require('openai');
-const Anthropic = require('@anthropic-ai/sdk');
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+// 遅延初期化（ビルド時のクラッシュ防止）
+let openai, anthropic;
+function getOpenAI() {
+  if (!openai) {
+    const OpenAI = require('openai');
+    openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return openai;
+}
+function getAnthropic() {
+  if (!anthropic) {
+    const Anthropic = require('@anthropic-ai/sdk');
+    anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+  }
+  return anthropic;
+}
 
 const GAS_WEBAPP_URL = process.env.GAS_WEBAPP_URL;
 
@@ -33,7 +45,7 @@ async function downloadAudio(messageId, channelAccessToken) {
 async function transcribe(audioBuffer) {
   const { toFile } = require('openai');
   const file = await toFile(audioBuffer, 'audio.m4a', { type: 'audio/m4a' });
-  const resp = await openai.audio.transcriptions.create({
+  const resp = await getOpenAI().audio.transcriptions.create({
     model: 'whisper-1',
     file: file,
     language: 'ja',
@@ -62,7 +74,7 @@ ${transcript}`;
     prompt += `\n\n## 追加情報（以下の情報も議事録に反映してください）\n${additionalInfo.join('\n')}`;
   }
 
-  const response = await anthropic.messages.create({
+  const response = await getAnthropic().messages.create({
     model: 'claude-opus-4-6',
     max_tokens: 16000,
     thinking: { type: 'adaptive' },
@@ -77,7 +89,7 @@ ${transcript}`;
 
 // Claude APIで議事録を修正
 async function reviseMinutes(currentMinutes, instruction) {
-  const response = await anthropic.messages.create({
+  const response = await getAnthropic().messages.create({
     model: 'claude-opus-4-6',
     max_tokens: 16000,
     thinking: { type: 'adaptive' },
