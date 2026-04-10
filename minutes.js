@@ -33,17 +33,19 @@ function clearSession(userId) {
 
 // 音声ファイルをLINEからダウンロード
 async function downloadAudio(messageId, channelAccessToken) {
-  // LINE SDK v9のBlobClientはESMでstream変換が不安定なので直接fetch
   const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
-  const resp = await fetch(url, {
+  console.log('Downloading audio:', url);
+  const resp = await axios.get(url, {
     headers: { Authorization: `Bearer ${channelAccessToken}` },
+    responseType: 'arraybuffer',
+    maxRedirects: 5,
   });
-  if (!resp.ok) {
-    throw new Error(`LINE content download failed: ${resp.status} ${resp.statusText}`);
+  console.log('Download response:', resp.status, 'content-type:', resp.headers['content-type'], 'data length:', resp.data ? resp.data.length : 0);
+  if (!resp.data || resp.data.length === 0) {
+    throw new Error(`LINE content empty: status=${resp.status} ct=${resp.headers['content-type']} url=${url}`);
   }
-  const arrayBuf = await resp.arrayBuffer();
-  const buffer = Buffer.from(arrayBuf);
-  const contentType = resp.headers.get('content-type') || 'audio/m4a';
+  const buffer = Buffer.from(resp.data);
+  const contentType = resp.headers['content-type'] || 'audio/m4a';
   return { buffer, contentType };
 }
 
@@ -228,10 +230,7 @@ async function handleAudioMessage(event, channelAccessToken, pushMessageFn, repl
   } catch (err) {
     console.error('Transcription error:', err);
     const detail = err.response ? JSON.stringify(err.response.data).substring(0, 200) : err.message;
-    const { buffer: ab, contentType: ct } = await downloadAudio(messageId, channelAccessToken).catch(() => ({ buffer: null, contentType: 'unknown' }));
-    const size = ab ? ab.length : 'unknown';
-    const hdr = ab ? ab.slice(0, 8).toString('hex') : 'unknown';
-    await pushMessageFn(userId, '失敗: ' + detail + '\ntype:' + ct + ' size:' + size + ' hdr:' + hdr);
+    await pushMessageFn(userId, '失敗: ' + detail + '\nmsgId:' + messageId);
   }
 }
 
