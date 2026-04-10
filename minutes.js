@@ -31,22 +31,38 @@ function clearSession(userId) {
   minutesSessions.delete(userId);
 }
 
-// 音声ファイルをLINEからダウンロード
+// 音声ファイルをLINEからダウンロード（202の場合リトライ）
 async function downloadAudio(messageId, channelAccessToken) {
   const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
-  console.log('Downloading audio:', url);
-  const resp = await axios.get(url, {
-    headers: { Authorization: `Bearer ${channelAccessToken}` },
-    responseType: 'arraybuffer',
-    maxRedirects: 5,
-  });
-  console.log('Download response:', resp.status, 'content-type:', resp.headers['content-type'], 'data length:', resp.data ? resp.data.length : 0);
-  if (!resp.data || resp.data.length === 0) {
-    throw new Error(`LINE content empty: status=${resp.status} ct=${resp.headers['content-type']} url=${url}`);
+  const maxRetries = 10;
+  const delay = (ms) => new Promise(r => setTimeout(r, ms));
+
+  for (let i = 0; i < maxRetries; i++) {
+    console.log(`Downloading audio (attempt ${i + 1}):`, url);
+    const resp = await axios.get(url, {
+      headers: { Authorization: `Bearer ${channelAccessToken}` },
+      responseType: 'arraybuffer',
+      maxRedirects: 5,
+      validateStatus: () => true, // 全ステータスを受け入れる
+    });
+    console.log('Download response:', resp.status, 'content-type:', resp.headers['content-type'], 'data length:', resp.data ? resp.data.length : 0);
+
+    if (resp.status === 200 && resp.data && resp.data.length > 0) {
+      const buffer = Buffer.from(resp.data);
+      const contentType = resp.headers['content-type'] || 'audio/m4a';
+      return { buffer, contentType };
+    }
+
+    // 202 = まだ処理中、リトライ
+    if (resp.status === 202) {
+      console.log('Content not ready, waiting 3s...');
+      await delay(3000);
+      continue;
+    }
+
+    throw new Error(`LINE content download failed: status=${resp.status}`);
   }
-  const buffer = Buffer.from(resp.data);
-  const contentType = resp.headers['content-type'] || 'audio/m4a';
-  return { buffer, contentType };
+  throw new Error('LINE content not ready after retries');
 }
 
 // Whisper APIで文字起こし
