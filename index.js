@@ -19,7 +19,18 @@ app.use('/webhook', express.json());
 app.post('/webhook', (req, res) => {
   res.status(200).end();
   if (req.body && req.body.events) {
-    Promise.all(req.body.events.map(handleEvent)).catch(console.error);
+    Promise.all(req.body.events.map(async (event) => {
+      try {
+        await handleEvent(event);
+      } catch (err) {
+        console.error('handleEvent error:', err);
+        // デバッグ: エラーをLINEに通知
+        const uid = event.source && event.source.userId;
+        if (uid) {
+          pushMessage(uid, 'エラー: ' + (err.message || String(err)).substring(0, 300)).catch(() => {});
+        }
+      }
+    }));
   }
 });
 
