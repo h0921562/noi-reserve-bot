@@ -18,6 +18,7 @@ const app = express();
 app.use('/webhook', express.json());
 app.post('/webhook', (req, res) => {
   res.status(200).end();
+  console.log('Webhook received:', JSON.stringify(req.body && req.body.events ? req.body.events.map(e => e.message && e.message.type) : 'no events'));
   if (req.body && req.body.events) {
     Promise.all(req.body.events.map(async (event) => {
       try {
