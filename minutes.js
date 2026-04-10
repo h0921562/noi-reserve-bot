@@ -31,21 +31,20 @@ function clearSession(userId) {
   minutesSessions.delete(userId);
 }
 
-// 音声ファイルをLINEからダウンロード（SDK v9のBlobClient使用）
+// 音声ファイルをLINEからダウンロード
 async function downloadAudio(messageId, channelAccessToken) {
-  const { messagingApi } = require('@line/bot-sdk');
-  const blobClient = new messagingApi.MessagingApiBlobClient({
-    channelAccessToken: channelAccessToken,
+  // LINE SDK v9のBlobClientはESMでstream変換が不安定なので直接fetch
+  const url = `https://api-data.line.me/v2/bot/message/${messageId}/content`;
+  const resp = await fetch(url, {
+    headers: { Authorization: `Bearer ${channelAccessToken}` },
   });
-  const stream = await blobClient.getMessageContent(messageId);
-
-  // streamをBufferに変換
-  const chunks = [];
-  for await (const chunk of stream) {
-    chunks.push(chunk);
+  if (!resp.ok) {
+    throw new Error(`LINE content download failed: ${resp.status} ${resp.statusText}`);
   }
-  const buffer = Buffer.concat(chunks);
-  return { buffer, contentType: 'audio/m4a' };
+  const arrayBuf = await resp.arrayBuffer();
+  const buffer = Buffer.from(arrayBuf);
+  const contentType = resp.headers.get('content-type') || 'audio/m4a';
+  return { buffer, contentType };
 }
 
 // Whisper APIで文字起こし
