@@ -43,19 +43,24 @@ async function downloadAudio(messageId, channelAccessToken) {
 
 // Whisper APIで文字起こし
 async function transcribe(audioBuffer) {
-  // Node.js Readable streamとして渡す
-  const { Readable } = require('stream');
-  const stream = new Readable();
-  stream.push(audioBuffer);
-  stream.push(null);
-  stream.path = 'audio.m4a'; // OpenAI SDKがファイル名を読む
+  const fs = require('fs');
+  const os = require('os');
+  const path = require('path');
 
-  const resp = await getOpenAI().audio.transcriptions.create({
-    model: 'whisper-1',
-    file: stream,
-    language: 'ja',
-  });
-  return resp.text;
+  // 一時ファイルに書き出し
+  const tmpPath = path.join(os.tmpdir(), 'audio_' + Date.now() + '.m4a');
+  fs.writeFileSync(tmpPath, audioBuffer);
+
+  try {
+    const resp = await getOpenAI().audio.transcriptions.create({
+      model: 'whisper-1',
+      file: fs.createReadStream(tmpPath),
+      language: 'ja',
+    });
+    return resp.text;
+  } finally {
+    fs.unlinkSync(tmpPath);
+  }
 }
 
 // Claude APIで議事録整形
