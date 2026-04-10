@@ -48,40 +48,21 @@ async function transcribe(audioBuffer, contentType) {
   const os = require('os');
   const path = require('path');
 
-  // Content-Typeから拡張子を決定
-  const extMap = {
-    'audio/m4a': '.m4a', 'audio/mp4': '.m4a', 'audio/aac': '.m4a',
-    'audio/x-m4a': '.m4a', 'audio/mpeg': '.mp3', 'audio/mp3': '.mp3',
-    'audio/ogg': '.ogg', 'audio/wav': '.wav', 'audio/webm': '.webm',
-    'audio/flac': '.flac', 'audio/x-flac': '.flac',
-  };
-  const ext = extMap[contentType] || '.mp3'; // デフォルトmp3
-
-  const tmpPath = path.join(os.tmpdir(), 'audio_' + Date.now() + ext);
+  // LINEの音声はContent-Typeに関係なく.m4aとして保存
+  // OpenAI Whisper APIはファイル名の拡張子でフォーマットを判定する
+  const tmpPath = path.join(os.tmpdir(), 'audio_' + Date.now() + '.m4a');
   fs.writeFileSync(tmpPath, audioBuffer);
+  console.log('Audio saved:', tmpPath, 'size:', audioBuffer.length, 'contentType:', contentType);
 
   try {
-    // LINEの音声はAACコンテナの場合があるのでffmpegでmp3に変換
-    const mp3Path = tmpPath.replace(/\.[^.]+$/, '.mp3');
-    const { execSync } = require('child_process');
-    try {
-      execSync(`ffmpeg -i "${tmpPath}" -acodec libmp3lame -y "${mp3Path}" 2>/dev/null`);
-      fs.unlinkSync(tmpPath);
-    } catch (e) {
-      // ffmpegがなければそのまま使う
-      console.log('ffmpeg not available, using original file');
-    }
-    const filePath = fs.existsSync(mp3Path) ? mp3Path : tmpPath;
-
     const resp = await getOpenAI().audio.transcriptions.create({
       model: 'whisper-1',
-      file: fs.createReadStream(filePath),
+      file: fs.createReadStream(tmpPath),
       language: 'ja',
     });
     return resp.text;
   } finally {
     try { fs.unlinkSync(tmpPath); } catch(e) {}
-    try { fs.unlinkSync(tmpPath.replace(/\.[^.]+$/, '.mp3')); } catch(e) {}
   }
 }
 
@@ -240,7 +221,9 @@ async function handleAudioMessage(event, channelAccessToken, pushMessageFn, repl
   } catch (err) {
     console.error('Transcription error:', err);
     const detail = err.response ? JSON.stringify(err.response.data).substring(0, 200) : err.message;
-    await pushMessageFn(userId, '文字起こしに失敗しました: ' + detail);
+    const { buffer: ab, contentType: ct } = await downloadAudio(messageId, channelAccessToken).catch(() => ({ buffer: null, contentType: 'unknown' }));
+    const size = ab ? ab.length : 'unknown';
+    await pushMessageFn(userId, '文字起こしに失敗しました: ' + detail + '\n[contentType: ' + ct + ', size: ' + size + ']');
   }
 }
 
