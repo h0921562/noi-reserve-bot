@@ -38,28 +38,50 @@ async function downloadAudio(messageId, channelAccessToken) {
     headers: { Authorization: `Bearer ${channelAccessToken}` },
     responseType: 'arraybuffer',
   });
-  return Buffer.from(resp.data);
+  const contentType = resp.headers['content-type'] || 'audio/mp3';
+  return { buffer: Buffer.from(resp.data), contentType };
 }
 
 // Whisper APIで文字起こし
-async function transcribe(audioBuffer) {
+async function transcribe(audioBuffer, contentType) {
   const fs = require('fs');
   const os = require('os');
   const path = require('path');
 
-  // 一時ファイルに書き出し
-  const tmpPath = path.join(os.tmpdir(), 'audio_' + Date.now() + '.m4a');
+  // Content-Typeから拡張子を決定
+  const extMap = {
+    'audio/m4a': '.m4a', 'audio/mp4': '.m4a', 'audio/aac': '.m4a',
+    'audio/x-m4a': '.m4a', 'audio/mpeg': '.mp3', 'audio/mp3': '.mp3',
+    'audio/ogg': '.ogg', 'audio/wav': '.wav', 'audio/webm': '.webm',
+    'audio/flac': '.flac', 'audio/x-flac': '.flac',
+  };
+  const ext = extMap[contentType] || '.mp3'; // デフォルトmp3
+
+  const tmpPath = path.join(os.tmpdir(), 'audio_' + Date.now() + ext);
   fs.writeFileSync(tmpPath, audioBuffer);
 
   try {
+    // LINEの音声はAACコンテナの場合があるのでffmpegでmp3に変換
+    const mp3Path = tmpPath.replace(/\.[^.]+$/, '.mp3');
+    const { execSync } = require('child_process');
+    try {
+      execSync(`ffmpeg -i "${tmpPath}" -acodec libmp3lame -y "${mp3Path}" 2>/dev/null`);
+      fs.unlinkSync(tmpPath);
+    } catch (e) {
+      // ffmpegがなければそのまま使う
+      console.log('ffmpeg not available, using original file');
+    }
+    const filePath = fs.existsSync(mp3Path) ? mp3Path : tmpPath;
+
     const resp = await getOpenAI().audio.transcriptions.create({
       model: 'whisper-1',
-      file: fs.createReadStream(tmpPath),
+      file: fs.createReadStream(filePath),
       language: 'ja',
     });
     return resp.text;
   } finally {
-    fs.unlinkSync(tmpPath);
+    try { fs.unlinkSync(tmpPath); } catch(e) {}
+    try { fs.unlinkSync(tmpPath.replace(/\.[^.]+$/, '.mp3')); } catch(e) {}
   }
 }
 
@@ -194,8 +216,8 @@ async function handleAudioMessage(event, channelAccessToken, pushMessageFn, repl
   }
 
   try {
-    const audioBuffer = await downloadAudio(messageId, channelAccessToken);
-    const transcript = await transcribe(audioBuffer);
+    const { buffer: audioBuffer, contentType } = await downloadAudio(messageId, channelAccessToken);
+    const transcript = await transcribe(audioBuffer, contentType);
 
     const session = {
       transcript,
