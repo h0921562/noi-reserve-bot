@@ -43,11 +43,16 @@ async function downloadAudio(messageId, channelAccessToken) {
 
 // Whisper APIで文字起こし
 async function transcribe(audioBuffer) {
-  const { toFile } = require('openai');
-  const file = await toFile(audioBuffer, 'audio.m4a', { type: 'audio/m4a' });
+  // Node.js Readable streamとして渡す
+  const { Readable } = require('stream');
+  const stream = new Readable();
+  stream.push(audioBuffer);
+  stream.push(null);
+  stream.path = 'audio.m4a'; // OpenAI SDKがファイル名を読む
+
   const resp = await getOpenAI().audio.transcriptions.create({
     model: 'whisper-1',
-    file: file,
+    file: stream,
     language: 'ja',
   });
   return resp.text;
@@ -207,7 +212,8 @@ async function handleAudioMessage(event, channelAccessToken, pushMessageFn, repl
     );
   } catch (err) {
     console.error('Transcription error:', err);
-    await pushMessageFn(userId, '文字起こしに失敗しました: ' + err.message);
+    const detail = err.response ? JSON.stringify(err.response.data).substring(0, 200) : err.message;
+    await pushMessageFn(userId, '文字起こしに失敗しました: ' + detail);
   }
 }
 
