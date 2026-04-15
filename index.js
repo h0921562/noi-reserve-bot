@@ -168,7 +168,10 @@ async function handleEvent(event) {
     }
   } catch (err) {
     console.error('Error handling event:', err);
-    await reply(replyToken, 'エラーが発生しました。もう一度お試しください。').catch(() => {});
+    const errMsg = 'エラー: ' + (err.message || String(err)).substring(0, 300);
+    await reply(replyToken, errMsg).catch(() =>
+      pushMessage(userId, errMsg).catch(() => {})
+    );
   }
 }
 
@@ -184,7 +187,14 @@ async function handleReserve(replyToken, userId, text) {
 
   await reply(replyToken, `${date} ${startTime}-${endTime} の空き状況を確認中...`);
 
-  const availability = await checkAvailability(date, startTime, endTime);
+  let availability;
+  try {
+    availability = await checkAvailability(date, startTime, endTime);
+  } catch (err) {
+    console.error('checkAvailability error:', err);
+    await pushMessage(userId, '予約サイトへの接続に失敗しました: ' + (err.message || String(err)).substring(0, 200));
+    return;
+  }
 
   const room6 = availability.rooms.find(r => r.id === '42');
   const room4 = availability.rooms.find(r => r.id === '25');
