@@ -85,21 +85,21 @@ async function handleAudioMessage(event, channelAccessToken, pushFn, replyFn) {
     }
 
     const whisperFileSize = fs.statSync(whisperPath).size;
-    console.log('Calling Whisper API via axios... OPENAI_API_KEY set:', !!process.env.OPENAI_API_KEY, 'file:', whisperPath, 'size:', (whisperFileSize / 1024 / 1024).toFixed(2) + 'MB');
+    console.log('Calling Groq Whisper API... GROQ_API_KEY set:', !!process.env.GROQ_API_KEY, 'file:', whisperPath, 'size:', (whisperFileSize / 1024 / 1024).toFixed(2) + 'MB');
 
-    // OpenAI SDKではなくaxiosで直接呼ぶ（Connection error回避）
+    // Groq Whisper API（無料）
     const FormData = require('form-data');
     const formData = new FormData();
     formData.append('file', fs.createReadStream(whisperPath));
-    formData.append('model', 'whisper-1');
+    formData.append('model', 'whisper-large-v3');
     formData.append('language', 'ja');
 
     let transcript;
     try {
-      const whisperResp = await axios.post('https://api.openai.com/v1/audio/transcriptions', formData, {
+      const whisperResp = await axios.post('https://api.groq.com/openai/v1/audio/transcriptions', formData, {
         headers: {
           ...formData.getHeaders(),
-          'Authorization': 'Bearer ' + process.env.OPENAI_API_KEY,
+          'Authorization': 'Bearer ' + process.env.GROQ_API_KEY,
         },
         maxContentLength: Infinity,
         maxBodyLength: Infinity,
@@ -110,18 +110,18 @@ async function handleAudioMessage(event, channelAccessToken, pushFn, replyFn) {
       var errData = whisperErr.response ? JSON.stringify(whisperErr.response.data).substring(0, 300) : '';
       var errCode = whisperErr.code || '';
       var errMsg = whisperErr.message || String(whisperErr);
-      console.error('Whisper API error:', { code: errCode, status: whisperErr.response && whisperErr.response.status, message: errMsg, data: errData });
+      console.error('Groq Whisper API error:', { code: errCode, status: whisperErr.response && whisperErr.response.status, message: errMsg, data: errData });
       var detail = errMsg;
       if (whisperErr.response && whisperErr.response.status) detail = 'status=' + whisperErr.response.status + ' ' + detail;
       if (errCode) detail = 'code=' + errCode + ' ' + detail;
       if (errData) detail += '\n' + errData;
-      await pushFn(userId, 'Whisper APIエラー:\n' + detail.substring(0, 400));
+      await pushFn(userId, '文字起こしエラー:\n' + detail.substring(0, 400));
       return;
     } finally {
       try { fs.unlinkSync(tmpPath); } catch(e) {}
       if (whisperPath !== tmpPath) try { fs.unlinkSync(whisperPath); } catch(e) {}
     }
-    console.log('Whisper API success, text length:', transcript.text.length);
+    console.log('Groq Whisper API success, text length:', transcript.text.length);
 
     const text = transcript.text;
     if (minutesSessions.has(userId)) clearTimeout(minutesSessions.get(userId).timer);
