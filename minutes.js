@@ -51,25 +51,45 @@ async function handleAudioMessage(event, channelAccessToken, pushFn, replyFn) {
 
     await pushFn(userId, 'ダウンロード完了: ' + audioBuffer.length + 'bytes\n文字起こし中...');
 
-    // ファイルサイズチェック（Whisper APIの上限は25MB）
-    const fileSizeMB = audioBuffer.length / (1024 * 1024);
-    console.log('Audio file size:', fileSizeMB.toFixed(2) + 'MB');
-    if (fileSizeMB > 25) {
-      await pushFn(userId, 'エラー: 音声ファイルが大きすぎます（' + fileSizeMB.toFixed(1) + 'MB）。25MB以下にしてください。');
-      return;
-    }
-
-    // 一時ファイルに保存してWhisper APIへ
+    // 一時ファイルに保存
     const fs = require('fs');
+    const { execSync } = require('child_process');
     const tmpPath = '/tmp/audio_' + Date.now() + '.m4a';
     fs.writeFileSync(tmpPath, audioBuffer);
 
-    console.log('Calling Whisper API... OPENAI_API_KEY set:', !!process.env.OPENAI_API_KEY, 'key prefix:', (process.env.OPENAI_API_KEY || '').substring(0, 10));
+    // ファイルサイズチェック（Whisper APIの上限は25MB）
+    const fileSizeMB = audioBuffer.length / (1024 * 1024);
+    console.log('Audio file size:', fileSizeMB.toFixed(2) + 'MB');
+
+    let whisperPath = tmpPath;
+    if (fileSizeMB > 20) {
+      // ffmpegで圧縮（64kbps mono）
+      const compressedPath = '/tmp/audio_compressed_' + Date.now() + '.mp3';
+      try {
+        console.log('Compressing audio with ffmpeg...');
+        execSync('ffmpeg -i ' + tmpPath + ' -ac 1 -ab 64k -ar 16000 ' + compressedPath + ' -y', { timeout: 120000 });
+        const compressedSize = fs.statSync(compressedPath).size / (1024 * 1024);
+        console.log('Compressed size:', compressedSize.toFixed(2) + 'MB');
+        if (compressedSize > 25) {
+          fs.unlinkSync(tmpPath);
+          fs.unlinkSync(compressedPath);
+          await pushFn(userId, 'エラー: 圧縮後も25MBを超えています（' + compressedSize.toFixed(1) + 'MB）。短い録音で試してください。');
+          return;
+        }
+        whisperPath = compressedPath;
+      } catch (ffErr) {
+        console.error('ffmpeg error:', ffErr.message);
+        // ffmpegが無い場合はそのまま試す
+        console.log('ffmpeg not available, trying original file');
+      }
+    }
+
+    console.log('Calling Whisper API... OPENAI_API_KEY set:', !!process.env.OPENAI_API_KEY, 'file:', whisperPath);
     let transcript;
     try {
       transcript = await getOpenAI().audio.transcriptions.create({
         model: 'whisper-1',
-        file: fs.createReadStream(tmpPath),
+        file: fs.createReadStream(whisperPath),
         language: 'ja',
       });
     } catch (whisperErr) {
@@ -81,14 +101,15 @@ async function handleAudioMessage(event, channelAccessToken, pushFn, replyFn) {
         type: whisperErr.type,
         cause: whisperErr.cause ? String(whisperErr.cause) : undefined,
       }));
-      fs.unlinkSync(tmpPath);
       var detail = whisperErr.message || String(whisperErr);
       if (whisperErr.status) detail = 'status=' + whisperErr.status + ' ' + detail;
       if (whisperErr.code) detail = 'code=' + whisperErr.code + ' ' + detail;
       await pushFn(userId, 'Whisper APIエラー:\n' + detail.substring(0, 400));
       return;
+    } finally {
+      try { fs.unlinkSync(tmpPath); } catch(e) {}
+      if (whisperPath !== tmpPath) try { fs.unlinkSync(whisperPath); } catch(e) {}
     }
-    fs.unlinkSync(tmpPath);
     console.log('Whisper API success, text length:', transcript.text.length);
 
     const text = transcript.text;
