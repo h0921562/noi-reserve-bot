@@ -2,7 +2,7 @@ const axios = require('axios');
 
 let openai, anthropic;
 function getOpenAI() {
-  if (!openai) { const O = require('openai'); openai = new O({ apiKey: process.env.OPENAI_API_KEY }); }
+  if (!openai) { const O = require('openai'); openai = new O({ apiKey: process.env.OPENAI_API_KEY, timeout: 5 * 60 * 1000, maxRetries: 3 }); }
   return openai;
 }
 function getAnthropic() {
