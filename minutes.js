@@ -84,26 +84,37 @@ async function handleAudioMessage(event, channelAccessToken, pushFn, replyFn) {
       }
     }
 
-    console.log('Calling Whisper API... OPENAI_API_KEY set:', !!process.env.OPENAI_API_KEY, 'file:', whisperPath);
+    const whisperFileSize = fs.statSync(whisperPath).size;
+    console.log('Calling Whisper API via axios... OPENAI_API_KEY set:', !!process.env.OPENAI_API_KEY, 'file:', whisperPath, 'size:', (whisperFileSize / 1024 / 1024).toFixed(2) + 'MB');
+
+    // OpenAI SDKではなくaxiosで直接呼ぶ（Connection error回避）
+    const FormData = require('form-data');
+    const formData = new FormData();
+    formData.append('file', fs.createReadStream(whisperPath));
+    formData.append('model', 'whisper-1');
+    formData.append('language', 'ja');
+
     let transcript;
     try {
-      transcript = await getOpenAI().audio.transcriptions.create({
-        model: 'whisper-1',
-        file: fs.createReadStream(whisperPath),
-        language: 'ja',
+      const whisperResp = await axios.post('https://api.openai.com/v1/audio/transcriptions', formData, {
+        headers: {
+          ...formData.getHeaders(),
+          'Authorization': 'Bearer ' + process.env.OPENAI_API_KEY,
+        },
+        maxContentLength: Infinity,
+        maxBodyLength: Infinity,
+        timeout: 5 * 60 * 1000,
       });
+      transcript = whisperResp.data;
     } catch (whisperErr) {
-      console.error('Whisper API error:', JSON.stringify({
-        name: whisperErr.name,
-        message: whisperErr.message,
-        status: whisperErr.status,
-        code: whisperErr.code,
-        type: whisperErr.type,
-        cause: whisperErr.cause ? String(whisperErr.cause) : undefined,
-      }));
-      var detail = whisperErr.message || String(whisperErr);
-      if (whisperErr.status) detail = 'status=' + whisperErr.status + ' ' + detail;
-      if (whisperErr.code) detail = 'code=' + whisperErr.code + ' ' + detail;
+      var errData = whisperErr.response ? JSON.stringify(whisperErr.response.data).substring(0, 300) : '';
+      var errCode = whisperErr.code || '';
+      var errMsg = whisperErr.message || String(whisperErr);
+      console.error('Whisper API error:', { code: errCode, status: whisperErr.response && whisperErr.response.status, message: errMsg, data: errData });
+      var detail = errMsg;
+      if (whisperErr.response && whisperErr.response.status) detail = 'status=' + whisperErr.response.status + ' ' + detail;
+      if (errCode) detail = 'code=' + errCode + ' ' + detail;
+      if (errData) detail += '\n' + errData;
       await pushFn(userId, 'Whisper APIエラー:\n' + detail.substring(0, 400));
       return;
     } finally {
