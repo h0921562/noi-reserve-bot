@@ -124,9 +124,11 @@ async function handleAudioMessage(event, channelAccessToken, pushFn, replyFn) {
     console.log('Groq Whisper API success, text length:', transcript.text.length);
 
     const text = transcript.text;
+    // 音声受信日時（JST）を記録
+    const receivedAt = new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().split('T')[0];
     if (minutesSessions.has(userId)) clearTimeout(minutesSessions.get(userId).timer);
     minutesSessions.set(userId, {
-      transcript: text, additionalInfo: [], title: '', phase: 'collecting',
+      transcript: text, receivedAt: receivedAt, additionalInfo: [], title: '', phase: 'collecting',
       minutes: null, docUrl: null, docId: null, docTitle: null,
       timer: setTimeout(function() { minutesSessions.delete(userId); }, 3600000),
     });
@@ -191,11 +193,13 @@ async function handleMinutesText(userId, text, pushFn) {
 async function generateMinutes(userId, session, pushFn) {
   await pushFn(userId, '議事録を作成中...');
   try {
-    var prompt = '以下は会議の文字起こしです。議事録としてまとめてください。\n\n## 要件\n' +
-      '- 最初の行に「YYYY-MM-DD 相手の会社名」形式でタイトルを書いてください（会議の日付と相手先の会社名を文字起こしから判断。日付不明なら今日の日付）\n' +
-      '- 冒頭に「議事録」という見出しは書かない（タイトルで分かるため）\n' +
-      '- 参加者は改行せずに1行でサラッと書く（例: 参加者: 三井不動産側 櫻井、門井 / NOI側 山澤、玄、山内）\n' +
-      '- 構成: 参加者（1行）→ 議題 → 議論の要点 → 決定事項 → TODO → 次回予定\n' +
+    var prompt = '以下は音声の文字起こしです。内容に応じて適切な形式でまとめてください（会議なら議事録、説明なら要点整理、相談なら要約など）。\n\n## 要件\n' +
+      '- 最初の行に「YYYY-MM-DD タイトル」形式でタイトルを書いてください\n' +
+      '- 日付は文字起こし内容から判断。不明なら音声受信日 ' + session.receivedAt + ' を使用\n' +
+      '- タイトルは内容から適切に判断（会議なら相手先名、説明なら件名など）\n' +
+      '- 冒頭に「議事録」等の見出しは書かない（タイトルで分かるため）\n' +
+      '- 参加者・登場人物がいれば改行せずに1行でサラッと書く（例: 参加者: 三井不動産側 櫻井、門井 / NOI側 山澤、玄、山内）\n' +
+      '- 内容に応じた構成でまとめる（例: 参加者→議題→要点→決定事項→TODO→次回予定）\n' +
       '- 聞き取れない・意味が不明な固有名詞は当て字にせず、カタカナ表記にする（後から修正できるように）\n' +
       '\n## 用語変換（以下の言い回しは正しい表記に変換してください）\n' +
       '- しょうまね/商マネ → 商業マネジメント部\n' +
@@ -218,7 +222,7 @@ async function generateMinutes(userId, session, pushFn) {
     var docTitle = firstLine.replace(/^#+\s*/, '').trim();
     // タイトルが長すぎる場合や日付がない場合のフォールバック
     if (docTitle.length > 50 || docTitle.length < 3) {
-      docTitle = new Date().toISOString().split('T')[0] + ' 会議';
+      docTitle = session.receivedAt + ' 記録';
     }
     var docResult = await createGoogleDoc(docTitle, minutes);
 
