@@ -51,17 +51,45 @@ async function handleAudioMessage(event, channelAccessToken, pushFn, replyFn) {
 
     await pushFn(userId, 'ダウンロード完了: ' + audioBuffer.length + 'bytes\n文字起こし中...');
 
+    // ファイルサイズチェック（Whisper APIの上限は25MB）
+    const fileSizeMB = audioBuffer.length / (1024 * 1024);
+    console.log('Audio file size:', fileSizeMB.toFixed(2) + 'MB');
+    if (fileSizeMB > 25) {
+      await pushFn(userId, 'エラー: 音声ファイルが大きすぎます（' + fileSizeMB.toFixed(1) + 'MB）。25MB以下にしてください。');
+      return;
+    }
+
     // 一時ファイルに保存してWhisper APIへ
     const fs = require('fs');
     const tmpPath = '/tmp/audio_' + Date.now() + '.m4a';
     fs.writeFileSync(tmpPath, audioBuffer);
 
-    const transcript = await getOpenAI().audio.transcriptions.create({
-      model: 'whisper-1',
-      file: fs.createReadStream(tmpPath),
-      language: 'ja',
-    });
+    console.log('Calling Whisper API... OPENAI_API_KEY set:', !!process.env.OPENAI_API_KEY, 'key prefix:', (process.env.OPENAI_API_KEY || '').substring(0, 10));
+    let transcript;
+    try {
+      transcript = await getOpenAI().audio.transcriptions.create({
+        model: 'whisper-1',
+        file: fs.createReadStream(tmpPath),
+        language: 'ja',
+      });
+    } catch (whisperErr) {
+      console.error('Whisper API error:', JSON.stringify({
+        name: whisperErr.name,
+        message: whisperErr.message,
+        status: whisperErr.status,
+        code: whisperErr.code,
+        type: whisperErr.type,
+        cause: whisperErr.cause ? String(whisperErr.cause) : undefined,
+      }));
+      fs.unlinkSync(tmpPath);
+      var detail = whisperErr.message || String(whisperErr);
+      if (whisperErr.status) detail = 'status=' + whisperErr.status + ' ' + detail;
+      if (whisperErr.code) detail = 'code=' + whisperErr.code + ' ' + detail;
+      await pushFn(userId, 'Whisper APIエラー:\n' + detail.substring(0, 400));
+      return;
+    }
     fs.unlinkSync(tmpPath);
+    console.log('Whisper API success, text length:', transcript.text.length);
 
     const text = transcript.text;
     if (minutesSessions.has(userId)) clearTimeout(minutesSessions.get(userId).timer);
