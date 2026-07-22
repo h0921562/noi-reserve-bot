@@ -2,6 +2,7 @@ const express = require('express');
 const line = require('@line/bot-sdk');
 const { checkAvailability, makeReservation, getReservations, cancelReservation } = require('./reserve');
 const { handleAudioMessage, handleMinutesText } = require('./minutes');
+const { parseDateTime, stripCancelKeyword, zen2han } = require('./datetime');
 
 const config = {
   channelSecret: process.env.LINE_CHANNEL_SECRET,
@@ -41,6 +42,14 @@ app.get('/', (req, res) => res.send('OK'));
 // 確認待ち状態を管理（userId -> 予約情報）
 const pendingConfirmations = new Map();
 
+// 取消の選択待ち・確認待ち状態（userId -> { list } または { confirm }）
+const pendingCancels = new Map();
+
+function setPendingCancel(userId, state) {
+  pendingCancels.set(userId, state);
+  setTimeout(function () { pendingCancels.delete(userId); }, 5 * 60 * 1000);
+}
+
 async function handleEvent(event) {
   if (event.type !== 'message') return;
 
@@ -76,13 +85,44 @@ async function handleEvent(event) {
   // グループの場合はメンションされてるかチェック（確認待ちユーザーは除く）
   if (event.source.type === 'group' || event.source.type === 'room') {
     const mention = event.message.mention;
-    if (!mention && !text.startsWith('@') && !pendingConfirmations.has(userId)) return;
+    if (!mention && !text.startsWith('@') && !pendingConfirmations.has(userId) && !pendingCancels.has(userId)) return;
   }
 
   // メンション部分を除去
   const cleanText = text.replace(/@\S+\s*/g, '').trim();
 
   try {
+    // 取消の選択待ち・確認待ちの処理（予約の確認待ちより先に見る）
+    if (pendingCancels.has(userId)) {
+      const st = pendingCancels.get(userId);
+      if (/^(いいえ|いや|やめる|やめ|中止|no|NO)$/i.test(cleanText)) {
+        pendingCancels.delete(userId);
+        await reply(replyToken, '取消をやめました');
+        return;
+      }
+      if (st.list) {
+        const n = parseInt(zen2han(cleanText).replace(/[^\d]/g, ''), 10);
+        if (n >= 1 && n <= st.list.length) {
+          pendingCancels.delete(userId);
+          const r = st.list[n - 1];
+          await executeCancel(replyToken, userId, r.date, (r.time || '').split('~')[0],
+            r.date + ' ' + r.time + ' ' + r.room);
+          return;
+        }
+        await reply(replyToken, '1〜' + st.list.length + ' の番号で選んでください（やめる場合は「いいえ」）');
+        return;
+      }
+      if (st.confirm) {
+        if (/^(はい|ok|OK|うん|了解|yes)$/i.test(cleanText)) {
+          pendingCancels.delete(userId);
+          await executeCancel(replyToken, userId, st.confirm.date, st.confirm.startTime, st.confirm.label);
+          return;
+        }
+        await reply(replyToken, st.confirm.label + ' を取り消しますか？（はい / いいえ）');
+        return;
+      }
+    }
+
     // 確認待ち状態の処理
     if (pendingConfirmations.has(userId)) {
       if (['ok', 'OK', 'はい', 'うん', 'おk', 'yes'].includes(cleanText)) {
@@ -280,377 +320,86 @@ async function handleList(replyToken, userId) {
 
 // キャンセル処理
 async function handleCancel(replyToken, userId, text) {
-  const cleaned = text.replace(/.*?(?:取消|キャンセル|やめたい|けし|消し|消す|消して|とりけし|とりやめ|取りやめ|取り消)\s*/, '').replace(/(?:て|して|したい|お願い|ください|頼む|よろしく)\s*$/, '').trim();
+  // 取消語を「その場で」除去する。旧実装は取消語より前を全部削っていたため、
+  // 「7/22 14時をキャンセル」のように日時が先に来る自然な語順で日時ごと消えていた。
+  const cleaned = stripCancelKeyword(text);
   const parsed = parseDateTime(cleaned);
 
-  // 日時指定がない場合、予約が1件なら自動でそれをキャンセル
+  // 日時が読めなかった場合は予約一覧から選ばせる
   if (!parsed) {
-    await reply(replyToken, 'キャンセル処理中...');
     const reservations = await getReservations();
     if (reservations.length === 0) {
-      await pushMessage(userId, '現在の予約はありません');
+      await sendResult(replyToken, userId, '現在の予約はありません');
       return;
     }
     if (reservations.length === 1) {
       const r = reservations[0];
-      const result = await cancelReservation(r.date, (r.time || '').split('~')[0]);
-      if (result.success) {
-        await pushMessage(userId, r.date + ' ' + r.time + ' ' + r.room + ' をキャンセルしました');
-      } else {
-        await pushMessage(userId, 'キャンセル失敗: ' + result.error);
-      }
+      await executeCancel(replyToken, userId, r.date, (r.time || '').split('~')[0],
+        r.date + ' ' + r.time + ' ' + r.room);
       return;
     }
-    // 複数件ある場合は番号で選ばせる
-    const lines = reservations.map(function(r, i) { return (i + 1) + '. ' + r.date + ' ' + r.time + ' ' + r.room; });
-    await pushMessage(userId, 'どの予約をキャンセルしますか？\n\n' + lines.join('\n') + '\n\n番号または日時を送ってください');
+    // 複数件は番号で選ばせる。選択待ち状態を保持しないと番号を受け取れない
+    const lines = reservations.map(function (r, i) {
+      return (i + 1) + '. ' + r.date + ' ' + r.time + ' ' + r.room;
+    });
+    setPendingCancel(userId, { list: reservations });
+    await sendResult(replyToken, userId,
+      'どの予約を取り消しますか？\n\n' + lines.join('\n') + '\n\n番号を送ってください（やめる場合は「いいえ」）');
     return;
   }
 
-  // キャンセル期限チェック
-  const now = new Date();
-  const startDateTime = new Date(`${parsed.date}T${parsed.startTime}:00`);
-  const deadline = new Date(startDateTime.getTime() - 2 * 60 * 60 * 1000);
+  const label = parsed.date + ' ' + parsed.startTime;
+  const deadlineMs = jstToMs(parsed.date, parsed.startTime) - 2 * 60 * 60 * 1000;
 
-  if (now > deadline) {
-    await reply(replyToken, `キャンセル期限（開始2時間前: ${formatDateTime(deadline)}）を過ぎています。キャンセルすると料金が発生します。\n本当にキャンセルしますか？`);
-    // TODO: 強制キャンセル確認フロー
+  // 期限を過ぎた取消は課金される。実行せず確認を取る
+  if (Date.now() > deadlineMs) {
+    setPendingCancel(userId, { confirm: { date: parsed.date, startTime: parsed.startTime, label: label } });
+    await sendResult(replyToken, userId,
+      'キャンセル期限（開始2時間前: ' + formatDateTime(deadlineMs) + '）を過ぎています。\n' +
+      '取り消すと料金が発生します。\n\n' + label + ' を取り消しますか？（はい / いいえ）');
     return;
   }
 
-  await reply(replyToken, 'キャンセル中...');
-
-  const result = await cancelReservation(parsed.date, parsed.startTime);
-  if (result.success) {
-    await pushMessage(userId, 'キャンセル完了しました');
-  } else {
-    await pushMessage(userId, `キャンセル失敗: ${result.error}`);
-  }
+  await executeCancel(replyToken, userId, parsed.date, parsed.startTime, label);
 }
 
-// 全角→半角変換
-function zen2han(str) {
-  return str.replace(/[０-９]/g, function(s) {
-    return String.fromCharCode(s.charCodeAt(0) - 0xFEE0);
-  }).replace(/[：／～ー]/g, function(s) {
-    return { '：': ':', '／': '/', '～': '~', 'ー': '-' }[s] || s;
-  });
+async function executeCancel(replyToken, userId, date, startTime, label) {
+  const result = await cancelReservation(date, startTime);
+  await sendResult(replyToken, userId,
+    result.success ? label + ' を取り消しました' : '取消に失敗しました: ' + result.error);
 }
 
-// ひらがな数字→半角数字
-const KANA_NUMS = {
-  'いち': '1', 'に': '2', 'さん': '3', 'よん': '4', 'し': '4', 'ご': '5',
-  'ろく': '6', 'なな': '7', 'しち': '7', 'はち': '8', 'きゅう': '9', 'く': '9',
-  'じゅう': '10', 'じゅういち': '11', 'じゅうに': '12', 'じゅうさん': '13',
-  'じゅうよん': '14', 'じゅうし': '14', 'じゅうご': '15', 'じゅうろく': '16',
-  'じゅうなな': '17', 'じゅうしち': '17', 'じゅうはち': '18', 'じゅうきゅう': '19', 'じゅうく': '19',
-  'にじゅう': '20', 'にじゅういち': '21', 'にじゅうに': '22', 'にじゅうさん': '23',
-  'にじゅうよん': '24', 'にじゅうご': '25', 'にじゅうろく': '26', 'にじゅうなな': '27',
-  'にじゅうはち': '28', 'にじゅうきゅう': '29', 'にじゅうく': '29',
-  'さんじゅう': '30', 'さんじゅういち': '31',
-};
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
 
-// カタカナ→ひらがな
-function kata2hira(str) {
-  return str.replace(/[\u30A1-\u30F6]/g, function(s) {
-    return String.fromCharCode(s.charCodeAt(0) - 0x60);
-  });
+// 'YYYY-MM-DD' と 'HH:MM' を JST として解釈しミリ秒に変換する。
+// new Date('2026-07-22T14:00:00') はサーバのタイムゾーンで解釈されるため、
+// TZ=UTC のホストだと9時間ずれる。ここではホスト設定に依存させない。
+function jstToMs(date, time) {
+  const p = String(date).split('-').map(Number);
+  const t = String(time).split(':').map(Number);
+  return Date.UTC(p[0], p[1] - 1, p[2], t[0], t[1] || 0) - JST_OFFSET_MS;
 }
 
-// ひらがな数字文字列を数値に変換
-function kanaToNum(str) {
-  var s = kata2hira(str).trim();
-  if (KANA_NUMS[s] !== undefined) return parseInt(KANA_NUMS[s]);
-  return NaN;
-}
-
-// 時間文字列を正規化（14→14:00, 1430→14:30, 14:00→14:00）
-function normalizeTime(t) {
-  t = t.replace(/[:\s]/g, '');
-  if (t.length <= 2) return t.padStart(2, '0') + ':00';
-  if (t.length === 3) return '0' + t[0] + ':' + t.substring(1);
-  if (t.length === 4) return t.substring(0, 2) + ':' + t.substring(2);
-  return t;
-}
-
-// YYYY-MM-DD形式でフォーマット
-function formatDate(d) {
-  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-}
-
-// 次の指定曜日の日付を返す（0=日,1=月,...6=土）
-function nextWeekday(dayIndex, weeksAhead) {
-  var now = new Date();
-  var current = now.getDay();
-  var diff = dayIndex - current;
-  if (weeksAhead > 0) {
-    diff += 7 * weeksAhead;
-    if (diff <= 7 * weeksAhead - 7) diff += 7;
-  } else {
-    if (diff <= 0) diff += 7;
-  }
-  var target = new Date(now);
-  target.setDate(now.getDate() + diff);
-  return target;
-}
-
-// 曜日名→曜日インデックス
-const WEEKDAY_MAP = {
-  '月': 1, 'げつ': 1, 'ゲツ': 1,
-  '火': 2, 'か': 2, 'カ': 2,
-  '水': 3, 'すい': 3, 'スイ': 3,
-  '木': 4, 'もく': 4, 'モク': 4,
-  '金': 5, 'きん': 5, 'キン': 5,
-  '土': 6, 'ど': 6, 'ド': 6,
-  '日': 0, 'にち': 0, 'ニチ': 0,
-};
-
-// 月名（ひらがな）→月番号
-const MONTH_KANA = {
-  'いちがつ': 1, 'にがつ': 2, 'さんがつ': 3, 'しがつ': 4, 'ごがつ': 5, 'ろくがつ': 6,
-  'しちがつ': 7, 'なながつ': 7, 'はちがつ': 8, 'くがつ': 9, 'きゅうがつ': 9,
-  'じゅうがつ': 10, 'じゅういちがつ': 11, 'じゅうにがつ': 12,
-};
-
-// 時間のひらがな/漢字表現を数字に変換 (じゅうよじ→14, 9じ→9)
-function parseTimeKana(str) {
-  var s = kata2hira(str).trim();
-  // 「〜じ」「〜時」で終わる部分を取り出す
-  var m = s.match(/^(.+?)(?:じ|時)$/);
-  if (!m) return NaN;
-  var numPart = m[1];
-  // まず数字か試す
-  if (/^\d{1,2}$/.test(numPart)) return parseInt(numPart);
-  // ひらがな数字
-  return kanaToNum(numPart);
-}
-
-// 日時パーサー
-function parseDateTime(text) {
-  text = zen2han(text);
-  var hiraText = kata2hira(text);
-
-  var date = null;
-  var remaining = text;
-
-  // --- 相対日パース ---
-  var relativePatterns = [
-    { pattern: /(?:今日|きょう|キョウ)/, offset: 0 },
-    { pattern: /(?:明日|あした|あす|アシタ|アス)/, offset: 1 },
-    { pattern: /(?:明後日|あさって|アサッテ)/, offset: 2 },
-  ];
-  for (var rp of relativePatterns) {
-    var rm = text.match(rp.pattern);
-    if (rm) {
-      var d = new Date();
-      d.setDate(d.getDate() + rp.offset);
-      date = formatDate(d);
-      remaining = text.substring(rm.index + rm[0].length).trim();
-      break;
-    }
-  }
-
-  // --- 曜日パース（来週X曜、X曜）---
-  if (!date) {
-    var weekdayMatch = text.match(/(?:(来週|らいしゅう|ライシュウ)\s*)?([月火水木金土日]|げつ|か|すい|もく|きん|ど|にち|ゲツ|カ|スイ|モク|キン|ド|ニチ)(?:よう(?:び|日)?|曜(?:日)?)?/);
-    if (weekdayMatch) {
-      var isNextWeek = !!weekdayMatch[1];
-      var dayKey = weekdayMatch[2];
-      var dayIdx = WEEKDAY_MAP[dayKey] !== undefined ? WEEKDAY_MAP[dayKey] : WEEKDAY_MAP[kata2hira(dayKey)];
-      if (dayIdx !== undefined) {
-        var target = nextWeekday(dayIdx, isNextWeek ? 1 : 0);
-        date = formatDate(target);
-        remaining = text.substring(weekdayMatch.index + weekdayMatch[0].length).trim();
-      }
-    }
-  }
-
-  // --- 来月Xにち ---
-  if (!date) {
-    var nextMonthMatch = text.match(/(?:来月|らいげつ|ライゲツ)\s*(\d{1,2})(?:日|にち)?/);
-    if (nextMonthMatch) {
-      var nd = new Date();
-      nd.setMonth(nd.getMonth() + 1);
-      nd.setDate(parseInt(nextMonthMatch[1]));
-      date = formatDate(nd);
-      remaining = text.substring(nextMonthMatch.index + nextMonthMatch[0].length).trim();
-    }
-  }
-
-  // --- ひらがな月日（しがつじゅうにち等）---
-  if (!date) {
-    for (var mk in MONTH_KANA) {
-      var monthIdx = hiraText.indexOf(mk);
-      if (monthIdx >= 0) {
-        var monthNum = MONTH_KANA[mk];
-        var afterMonth = hiraText.substring(monthIdx + mk.length);
-        // 日の部分を取得（ひらがな数字 or 数字 + にち/日）
-        var dayNum = null;
-        var dayMatchLen = 0;
-        // 数字+にち/日
-        var dayDigit = afterMonth.match(/^(\d{1,2})(?:にち|日)?/);
-        if (dayDigit) {
-          dayNum = parseInt(dayDigit[1]);
-          dayMatchLen = dayDigit[0].length;
-        } else {
-          // ひらがな数字+にち/日
-          for (var kn in KANA_NUMS) {
-            if (afterMonth.startsWith(kn + 'にち') || afterMonth.startsWith(kn + '日')) {
-              dayNum = parseInt(KANA_NUMS[kn]);
-              dayMatchLen = kn.length + (afterMonth.startsWith(kn + 'にち') ? 2 : 1);
-              break;
-            }
-            if (afterMonth.startsWith(kn)) {
-              dayNum = parseInt(KANA_NUMS[kn]);
-              dayMatchLen = kn.length;
-              break;
-            }
-          }
-        }
-        if (dayNum) {
-          var year = new Date().getFullYear();
-          var now = new Date();
-          // 過去の月日なら来年
-          var candidate = new Date(year, monthNum - 1, dayNum);
-          if (candidate < new Date(now.getFullYear(), now.getMonth(), now.getDate())) {
-            year++;
-          }
-          date = year + '-' + String(monthNum).padStart(2, '0') + '-' + String(dayNum).padStart(2, '0');
-          remaining = text.substring(0, monthIdx) + text.substring(monthIdx + mk.length + dayMatchLen);
-          remaining = remaining.trim();
-          break;
-        }
-      }
-    }
-  }
-
-  // --- 漢字月日（4月10日 等）---
-  if (!date) {
-    var kanjiDateMatch = text.match(/(\d{1,2})月(\d{1,2})日?/);
-    if (kanjiDateMatch) {
-      var km = parseInt(kanjiDateMatch[1]);
-      var kd = parseInt(kanjiDateMatch[2]);
-      var ky = new Date().getFullYear();
-      var kcandidate = new Date(ky, km - 1, kd);
-      if (kcandidate < new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())) {
-        ky++;
-      }
-      date = ky + '-' + String(km).padStart(2, '0') + '-' + String(kd).padStart(2, '0');
-      remaining = text.substring(kanjiDateMatch.index + kanjiDateMatch[0].length).trim();
-    }
-  }
-
-  // --- 数字日付（4/10, 2026-4-10 等）---
-  if (!date) {
-    var datePatterns = [
-      /(\d{4}[-\/]\d{1,2}[-\/]\d{1,2})/,
-      /(\d{1,2}\/\d{1,2})/,
-    ];
-    for (var dp of datePatterns) {
-      var dateMatch = text.match(dp);
-      if (dateMatch) {
-        date = dateMatch[1];
-        remaining = text.substring(dateMatch.index + dateMatch[0].length).trim();
-        break;
-      }
-    }
-  }
-
-  if (!date) return null;
-
-  // --- 時間パース ---
-  // 時間部分を探す（コロンあり・なし両対応）
-  var timePattern = /(\d{1,4}(?::\d{2})?)\s*[-~\u301c]\s*(\d{1,4}(?::\d{2})?)/;
-  var singleTimePattern = /(\d{1,4}(?::\d{2})?)/;
-
-  var startTime, endTime;
-  var rangeMatch = remaining.match(timePattern);
-  if (rangeMatch) {
-    startTime = normalizeTime(rangeMatch[1]);
-    endTime = normalizeTime(rangeMatch[2]);
-  } else {
-    // 「じゅうよじ」「14じ」等のひらがな時間
-    var kanaTimeRange = remaining.match(/(.+?)\s*[-~\u301cから]\s*(.+)/);
-    if (kanaTimeRange) {
-      var st = parseTimeKana(kanaTimeRange[1]);
-      var et = parseTimeKana(kanaTimeRange[2]);
-      if (!isNaN(st) && !isNaN(et)) {
-        startTime = String(st).padStart(2, '0') + ':00';
-        endTime = String(et).padStart(2, '0') + ':00';
-      }
-    }
-    if (!startTime) {
-      // 「X時からY時」パターン（数字+時）
-      var jiRange = remaining.match(/(\d{1,2})時\s*[-~\u301cから]\s*(\d{1,2})時/);
-      if (jiRange) {
-        startTime = String(parseInt(jiRange[1])).padStart(2, '0') + ':00';
-        endTime = String(parseInt(jiRange[2])).padStart(2, '0') + ':00';
-      }
-    }
-    if (!startTime) {
-      // 「X時半からY時」等（半=30分）
-      var jiHanRange = remaining.match(/(\d{1,2})時半\s*[-~\u301cから]\s*(\d{1,2})時(?:半)?/);
-      if (jiHanRange) {
-        startTime = String(parseInt(jiHanRange[1])).padStart(2, '0') + ':30';
-        var eHalf = remaining.includes(jiHanRange[2] + '時半');
-        endTime = String(parseInt(jiHanRange[2])).padStart(2, '0') + (eHalf ? ':30' : ':00');
-      }
-    }
-    if (!startTime) {
-      // 数字単体
-      var singleMatch = remaining.match(singleTimePattern);
-      if (singleMatch) {
-        startTime = normalizeTime(singleMatch[1]);
-        endTime = addHour(startTime);
-      } else {
-        // ひらがな単体時間
-        var kst = parseTimeKana(remaining);
-        if (!isNaN(kst)) {
-          startTime = String(kst).padStart(2, '0') + ':00';
-          endTime = addHour(startTime);
-        }
-      }
-    }
-    if (!startTime) return null;
-  }
-
-  // 月/日 → YYYY-MM-DD
-  if (date.match(/^\d{1,2}\/\d{1,2}$/)) {
-    var parts = date.split('/');
-    var yr = new Date().getFullYear();
-    var cand = new Date(yr, parseInt(parts[0]) - 1, parseInt(parts[1]));
-    if (cand < new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())) {
-      yr++;
-    }
-    date = yr + '-' + parts[0].padStart(2, '0') + '-' + parts[1].padStart(2, '0');
-  }
-  date = date.replace(/\//g, '-');
-
-  return { date: date, startTime: startTime, endTime: endTime };
-}
-
-function padTime(t) {
-  const [h, m] = t.split(':');
-  return h.padStart(2, '0') + ':' + m;
-}
-
-function addHour(time) {
-  const parts = time.split(':').map(Number);
-  return String(parts[0] + 1).padStart(2, '0') + ':' + String(parts[1]).padStart(2, '0');
+function formatDateTime(ms) {
+  const d = new Date(ms + JST_OFFSET_MS);
+  return (d.getUTCMonth() + 1) + '/' + d.getUTCDate() + ' ' +
+    String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
 }
 
 function calcCancelDeadline(date, startTime) {
-  const dt = new Date(`${date}T${startTime}:00`);
-  dt.setHours(dt.getHours() - 2);
-  return formatDateTime(dt);
+  return formatDateTime(jstToMs(date, startTime) - 2 * 60 * 60 * 1000);
 }
 
-function formatDateTime(dt) {
-  const m = dt.getMonth() + 1;
-  const d = dt.getDate();
-  const h = String(dt.getHours()).padStart(2, '0');
-  const min = String(dt.getMinutes()).padStart(2, '0');
-  return `${m}/${d} ${h}:${min}`;
+// 結果は応答メッセージ(reply)で返す。LINEの課金対象は push のみで、
+// reply は通数にカウントされない（グループでは push が人数分カウントされる）。
+// 応答トークンが切れていた場合だけ push にフォールバックする。
+async function sendResult(replyToken, userId, text) {
+  try {
+    await reply(replyToken, text);
+  } catch (err) {
+    console.error('reply failed, falling back to push:', err && err.message);
+    await pushMessage(userId, text).catch(function () {});
+  }
 }
 
 async function reply(replyToken, text) {
