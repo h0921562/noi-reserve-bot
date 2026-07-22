@@ -3,8 +3,8 @@ project: NOI/雑務/noi-reserve-bot
 status: in_progress
 health: at_risk
 updated: 2026-07-22
-summary: 修正をpush済み(082ad6d)だがRenderが拾わず本番は旧コードのまま。ダッシュボードでの手動デプロイ待ち
-next_action: RenderダッシュボードでAuto-Deploy設定を確認し手動デプロイする。/version が返れば反映完了
+summary: 836594eを本番反映済み。実機で実在予約の取消成功を確認。criticの独立レビュー結果待ち
+next_action: criticレビューの指摘に対応する。無料枠のエラー文面を受領して原因を確定する
 ---
 
 # 会議室予約bot — 進捗と引き継ぎ
@@ -13,21 +13,26 @@ next_action: RenderダッシュボードでAuto-Deploy設定を確認し手動�
 
 - 目的: LINEから日総第２２ビルの会議室（4階共用/6階）を予約・空き確認・取消する
 - ホスト: **Render 無料プラン**（`https://noi-reserve-bot.onrender.com`）。GitHub `h0921562/noi-reserve-bot`
-- 2026-07-22: 日時パースの重大バグ群と取消フローを修正し、`082ad6d` を origin/main へ push
-  - **ただし Render は10分待っても拾わず、本番は旧コードのまま**。`git push` では反映されない構成
-  - Render の API キー・CLI ともにこの環境に無く、ダッシュボードからの操作が必要
+- 2026-07-22: 日時パースの重大バグ群と取消フローを修正し、**`836594e` を本番反映済み**
+  - 実機LINEで実在予約(2027-04-28)の取消が成功することを確認（修正前は同じ操作が失敗していた）
 
-## 反映の確認方法
+## デプロイ手順（重要）
 
-`curl -s https://noi-reserve-bot.onrender.com/version` で稼働中のビルドが分かる。
-`build` が `2026-07-22-parse-cancel-fix` なら今回の修正が反映済み。
-push 前は 404（エンドポイント自体が存在しなかった）。
-返る `tz` フィールドで Render の TZ 設定も確認できる。
+**`git push` だけでは本番に反映されない。** Settings上は Auto-Deploy = On Commit なのに
+webhookが発火しない（082ad6d を push 後10分間 404 のままだった）。毎回この手順が要る。
+
+1. `git push origin main`
+2. Renderダッシュボード → `noi-reserve-bot`（`srv-d79l9seuk2gs73efh3u0`）
+3. 右上 **Manual Deploy → Deploy latest commit**
+4. `curl -s https://noi-reserve-bot.onrender.com/version` で `commit` が push したものと一致するか確認
+
+`/version` は稼働中ビルドの判別用に今回追加した。`index.js` の `BUILD` 定数を変更のたびに
+更新すること。返る `tz` で Render の TZ 設定も分かる（**現状 null = UTC稼働**）。
 
 ## 直近の完了（2026-07-22）
 
-- 回帰フィクスチャ整備（`test/cases.js` 53ケース、`test/run.js`、`test/flow.js`）。`npm test` で実行
-- **修正前 26/53 pass → 修正後 53/53 pass**（修正前の実測は `test/result_baseline.json` に保全）
+- 回帰フィクスチャ整備（`test/cases.js` 55ケース、`test/run.js`、`test/flow.js`）。`npm test` で実行
+- **修正前 26/53 pass → 修正後 55/55 pass**（修正前の実測は `test/result_baseline.json` に保全）
 - 日時パーサを `datetime.js` に切り出して全面修正。直した実害:
   - 曜日パーサが「7月22日」の「月」を月曜、「から」の「か」を火曜と誤認し**別の日に予約が入っていた**（7/22→7/27、7/28 等）
   - 範囲区切りの「から」を文字クラス `[-~〜から]` に入れていたため**終了時刻が落ちて常に1時間に丸められていた**
@@ -41,7 +46,7 @@ push 前は 404（エンドポイント自体が存在しなかった）。
 
 ## 実機で確認された不具合（2026-07-22 のトーク）
 
-修正版のテストに再現シナリオとして常設済み（`test/flow.js` シナリオ6/6b/6c/6d）。
+修正版のテストに再現シナリオとして常設済み（`test/flow.js` シナリオ6/6b/6c/6d/6e）。
 
 - 「4/28 16-17 キャンセル」→ 日時が消えて一覧提示になる
 - 一覧のあと番号「2」を送ると「日時を認識できませんでした」で終わる
