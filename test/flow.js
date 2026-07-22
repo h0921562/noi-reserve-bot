@@ -218,6 +218,19 @@ function check(label, cond, detail) {
     fakeSite.reservations.length === 1 && fakeSite.reservations[0].date === '2026-07-28',
     JSON.stringify(fakeSite.reservations));
 
+  console.log('\n■ シナリオ6e: 取消語の口語変化形（実機 10:52 で取りこぼした）');
+  reset();
+  fakeSite.reservations = [
+    { date: '2026-07-28', time: '16:00~17:00', room: '6階 会議室' },
+    { date: '2027-04-28', time: '16:00~17:00', room: '6階 会議室' },
+  ];
+  await say('4/28をキャンセる');
+  const r6e = sent.reply.concat(sent.push).join('\n');
+  check('取消として扱われる（新規予約の日時エラーにならない）',
+    !/日時を認識できませんでした/.test(r6e), r6e);
+  check('取消の対象選択に進んだ', /取り消しますか/.test(r6e), r6e);
+  await say('いいえ'); // 選択待ち状態を残さない（次のシナリオに漏れる）
+
   console.log('\n■ シナリオ5: 応答トークンが切れたときの push フォールバック');
   reset();
   fakeSite.reservations = [{ date: iso, time: '10:00~11:00', room: '6階 会議室' }];

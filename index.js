@@ -41,7 +41,7 @@ app.get('/', (req, res) => res.send('OK'));
 
 // デプロイ確認用。どのビルドが動いているかを外から判別するために置く。
 // 秘密情報は返さない。TZ は日付計算の前提確認に使う
-const BUILD = '2026-07-22-parse-cancel-fix';
+const BUILD = '2026-07-22-cancel-variants';
 app.get('/version', (req, res) => res.json({
   build: BUILD,
   commit: process.env.RENDER_GIT_COMMIT || null,
@@ -209,7 +209,9 @@ async function handleEvent(event) {
     // コマンド分岐
     if (/^(予約一覧|一覧|予約みせて|予約見せて|予約ある|予約確認|リスト)/.test(cleanText)) {
       await handleList(replyToken, userId);
-    } else if (/(?:取消|キャンセル|やめたい|けし|消し|消す|消して|とりけし|とりやめ|取りやめ|取り消)/.test(cleanText)) {
+    // 「キャンセる」のような口語の変化形も拾う。取りこぼすと新規予約として
+    // 処理されてしまい、取消のつもりが予約提案になる
+    } else if (/(?:取消|キャンセ[ルるりらろっ]*|やめたい|けし|消し|消す|消して|とりけし|とりやめ|取りやめ|取り消)/.test(cleanText)) {
       await handleCancel(replyToken, userId, cleanText);
     } else if (cleanText.startsWith('空き')) {
       await handleCheckOnly(replyToken, cleanText);

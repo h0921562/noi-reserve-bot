@@ -239,7 +239,7 @@ function parseDateTime(text, nowMs) {
 function stripCancelKeyword(text) {
   return String(text)
     .replace(/取り?消し?(?:て|たい|ます)?/g, ' ')
-    .replace(/(?:キャンセル|とりけし|とりやめ|取りやめ|やめたい|やめて|消して|消す)/g, ' ')
+    .replace(/(?:キャンセ[ルるりらろっ]*|とりけし|とりやめ|取りやめ|やめたい|やめて|消して|消す)/g, ' ')
     .replace(/の?予約(?:を|は|が)?/g, ' ')
     .replace(/(?:お願いします|お願い|ください|下さい|したい|して|頼む|よろしく)/g, ' ')
     .replace(/\s+/g, ' ')
