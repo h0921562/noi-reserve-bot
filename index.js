@@ -36,8 +36,19 @@ app.post('/webhook', (req, res) => {
   }
 });
 
-// Health check
+// Health check（セルフpingがここを叩くので応答は変えない）
 app.get('/', (req, res) => res.send('OK'));
+
+// デプロイ確認用。どのビルドが動いているかを外から判別するために置く。
+// 秘密情報は返さない。TZ は日付計算の前提確認に使う
+const BUILD = '2026-07-22-parse-cancel-fix';
+app.get('/version', (req, res) => res.json({
+  build: BUILD,
+  commit: process.env.RENDER_GIT_COMMIT || null,
+  tz: process.env.TZ || null,
+  serverTime: new Date().toISOString(),
+  node: process.version,
+}));
 
 // 確認待ち状態を管理（userId -> 予約情報）
 const pendingConfirmations = new Map();
