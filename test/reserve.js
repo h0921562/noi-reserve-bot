@@ -172,6 +172,25 @@ function loadReserve(site) {
       JSON.stringify(slots));
   }
 
+  console.log('\n■ 取消: 削除POSTが落ちても、実際に消えていれば成功と報告する（E1の取消側）');
+  {
+    let rows = [{ rsr_id: 1, rsr_date: '2026-08-01', start_time: '14:00:00', end_time: '15:00:00', room_name: '6階 会議室', e_key: '1111' }];
+    let posted = false;
+    const site = {
+      pageFor: () => listPage(rows),
+      onDelete: () => { posted = true; rows = []; },
+    };
+    // 削除は成立するが POST の応答が返らない状況
+    const mod = loadReserve(site);
+    const origPost = site.onDelete;
+    site.onDelete = () => { origPost(); throw new Error('socket hang up'); };
+    let r, threw = false;
+    try { r = await mod.cancelReservation('2026-08-01', '14:00', '6階 会議室'); }
+    catch (e) { threw = true; r = { thrown: e.message }; }
+    check('例外を投げない', !threw, JSON.stringify(r));
+    check('実際に消えているので成功と報告する', r && r.success === true, JSON.stringify(r) + ' posted=' + posted);
+  }
+
   console.log('\n■ 予約: 確認の読み直しが通信エラーでも例外を投げない（E1）');
   {
     let registered = false;

@@ -253,13 +253,17 @@ async function cancelReservation(date, startTime, roomName) {
   var params = new URLSearchParams();
   params.append('_token', token);
   params.append('rsr_id', target.rsr_id);
+  // POSTが応答前に落ちても取消が成立している場合がある。ここで失敗を断定すると
+  // 「取消に失敗しました」と伝えたのに実際は消えている状態になり、利用者は
+  // 予約が残っていると誤認して再予約しかねない。判断は下の読み直しに委ねる
+  var postFailed = false;
   try {
     await axios.post(action, params.toString(), {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: getCookie() },
       validateStatus: function() { return true; }
     });
   } catch (err) {
-    return { success: false, error: '\u30ad\u30e3\u30f3\u30bb\u30eb\u30a8\u30e9\u30fc' };
+    postFailed = true;
   }
 
   // POST\u306e\u30ec\u30b9\u30dd\u30f3\u30b9\u3092\u898b\u305a\u306b\u6210\u529f\u3092\u8fd4\u3059\u3068\u3001\u30b5\u30a4\u30c8\u304c\u671f\u9650\u5207\u308c\u7b49\u3067\u62d2\u5426\u3057\u3066\u3082
@@ -276,7 +280,12 @@ async function cancelReservation(date, startTime, roomName) {
   }
   var stillThere = after.some(function(r) { return r.rsr_id === target.rsr_id; });
   if (stillThere) {
-    return { success: false, error: '\u4e88\u7d04\u30b5\u30a4\u30c8\u304c\u53d6\u6d88\u3092\u53d7\u3051\u4ed8\u3051\u307e\u305b\u3093\u3067\u3057\u305f\uff08\u671f\u9650\u5207\u308c\u306e\u53ef\u80fd\u6027\uff09' };
+    return {
+      success: false,
+      error: postFailed
+        ? '予約サイトに接続できませんでした。予約一覧でご確認ください'
+        : '予約サイトが取消を受け付けませんでした（期限切れの可能性）'
+    };
   }
   return { success: true };
 }

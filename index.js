@@ -41,7 +41,7 @@ app.get('/', (req, res) => res.send('OK'));
 
 // デプロイ確認用。どのビルドが動いているかを外から判別するために置く。
 // 秘密情報は返さない。TZ は日付計算の前提確認に使う
-const BUILD = '2026-07-22-critic-r4';
+const BUILD = '2026-07-22-critic-final';
 app.get('/version', (req, res) => res.json({
   build: BUILD,
   commit: process.env.RENDER_GIT_COMMIT || null,
@@ -147,6 +147,10 @@ async function handleEvent(event) {
       // 日時を含まない中止表現は、取消語より先に中止として扱う
       const isAbort = /^(いいえ|いや|やめる|やめ|中止|no|NO)$/i.test(cleanText) ||
         (/やめ|中止|いらな|結構です|大丈夫です/.test(cleanText) &&
+          // 「取りやめたい」「やめたいので取り消して」は取消の依頼であって中止ではない
+          !/取りやめ|とりやめ|やめたい/.test(cleanText) &&
+          // 「1番はやめて2番にして」のような番号の言い直しを中止と読まない
+          !/\d/.test(cleanText) &&
           !parseDateTime(stripCancelKeyword(cleanText)));
       if (isAbort) {
         pendingCancels.delete(userId);
@@ -163,6 +167,13 @@ async function handleEvent(event) {
           // 選択後も即実行しない。期限超過なら課金されるため確認を挟む
           await askCancelConfirm(replyToken, userId, ctx, r.date, (r.time || '').split('~')[0],
             r.date + ' ' + r.time + ' ' + r.room, r.room);
+          return;
+        }
+        // 番号ではなく「取消 7/26 10時」と言い直された場合もやり直せるようにする。
+        // 確認待ちだけで受け付けて選択待ちで受け付けないのは非対称
+        if (CANCEL_RE.test(cleanText) && parseDateTime(stripCancelKeyword(cleanText))) {
+          pendingCancels.delete(userId);
+          await handleCancel(replyToken, userId, ctx, cleanText);
           return;
         }
         await reply(replyToken,
