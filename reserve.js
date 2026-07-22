@@ -141,6 +141,16 @@ async function makeReservation(date, startTime, endTime, roomId) {
     return { success: false, error: '\u767b\u9332\u30a8\u30e9\u30fc' };
   }
 
+  // \u767b\u9332POST\u306e\u7d50\u679c\u3092\u898b\u305a\u306b\u6210\u529f\u3092\u8fd4\u3059\u3068\u3001\u67a0\u304c\u57cb\u307e\u3063\u3066\u3044\u3066\u62d2\u5426\u3055\u308c\u3066\u3082
+  // bot\u304c\u300c\u4e88\u7d04\u5b8c\u4e86\u300d\u3068\u65ad\u8a00\u3057\u3066\u3057\u307e\u3046\u3002\u4e00\u89a7\u306b\u5b9f\u969b\u306b\u8f09\u3063\u305f\u304b\u3092\u78ba\u8a8d\u3059\u308b
+  var after = parseReservationList(await getReservationPage());
+  var created = after.some(function(r) {
+    return r.rsr_date === date && (r.start_time || '').indexOf(startTime) === 0;
+  });
+  if (!created) {
+    return { success: false, error: '\u4e88\u7d04\u30b5\u30a4\u30c8\u304c\u767b\u9332\u3092\u53d7\u3051\u4ed8\u3051\u307e\u305b\u3093\u3067\u3057\u305f\uff08\u67a0\u304c\u57cb\u307e\u3063\u3066\u3044\u308b\u53ef\u80fd\u6027\uff09' };
+  }
+
   var password = await getLatestPassword(date, startTime);
   return { success: true, password: password };
 }
@@ -196,16 +206,22 @@ async function getReservations() {
   });
 }
 
-async function cancelReservation(date, startTime) {
+// roomName を渡すと会議室も照合する。日付と開始時刻だけで消すと、
+// 同じ時間に複数の階が入っているとき別の階の予約を消してしまう
+async function cancelReservation(date, startTime, roomName) {
   var html = await getReservationPage();
   var list = parseReservationList(html);
   var target = null;
   for (var i = 0; i < list.length; i++) {
     var r = list[i];
-    if (r.rsr_date === date && (r.start_time || '').indexOf(startTime) === 0) {
-      target = r;
-      break;
-    }
+    if (r.rsr_date !== date) continue;
+    if ((r.start_time || '').indexOf(startTime) !== 0) continue;
+    if (roomName && r.room_name !== roomName) continue;
+    target = r;
+    break;
+  }
+  if (!target && roomName) {
+    return { success: false, error: '指定の会議室の予約が見つかりませんでした' };
   }
   if (!target) return { success: false, error: '\u8a72\u5f53\u3059\u308b\u4e88\u7d04\u304c\u898b\u3064\u304b\u308a\u307e\u305b\u3093\u3067\u3057\u305f' };
 
@@ -223,10 +239,18 @@ async function cancelReservation(date, startTime) {
       headers: { 'Content-Type': 'application/x-www-form-urlencoded', Cookie: getCookie() },
       validateStatus: function() { return true; }
     });
-    return { success: true };
   } catch (err) {
     return { success: false, error: '\u30ad\u30e3\u30f3\u30bb\u30eb\u30a8\u30e9\u30fc' };
   }
+
+  // POST\u306e\u30ec\u30b9\u30dd\u30f3\u30b9\u3092\u898b\u305a\u306b\u6210\u529f\u3092\u8fd4\u3059\u3068\u3001\u30b5\u30a4\u30c8\u304c\u671f\u9650\u5207\u308c\u7b49\u3067\u62d2\u5426\u3057\u3066\u3082
+  // bot\u304c\u300c\u53d6\u308a\u6d88\u3057\u307e\u3057\u305f\u300d\u3068\u65ad\u8a00\u3057\u3066\u3057\u307e\u3046\u3002\u4e00\u89a7\u3092\u8aad\u307f\u76f4\u3057\u3066\u5b9f\u969b\u306b\u6d88\u3048\u305f\u304b\u78ba\u8a8d\u3059\u308b
+  var after = parseReservationList(await getReservationPage());
+  var stillThere = after.some(function(r) { return r.rsr_id === target.rsr_id; });
+  if (stillThere) {
+    return { success: false, error: '\u4e88\u7d04\u30b5\u30a4\u30c8\u304c\u53d6\u6d88\u3092\u53d7\u3051\u4ed8\u3051\u307e\u305b\u3093\u3067\u3057\u305f\uff08\u671f\u9650\u5207\u308c\u306e\u53ef\u80fd\u6027\uff09' };
+  }
+  return { success: true };
 }
 
 module.exports = { checkAvailability, makeReservation, getReservations, cancelReservation };

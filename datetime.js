@@ -19,8 +19,15 @@ function jstFields(ms) {
   const d = new Date(ms + JST_OFFSET_MS);
   return { y: d.getUTCFullYear(), mo: d.getUTCMonth() + 1, d: d.getUTCDate(), dow: d.getUTCDay() };
 }
-// JST のその日の 00:00 のミリ秒
-function jstMidnight(y, mo, d) { return Date.UTC(y, mo - 1, d) - JST_OFFSET_MS; }
+// JST のその日の 00:00 のミリ秒。存在しない日付(2/30, 13月, 0日)は null を返す。
+// Date.UTC は桁上げを黙って通すため、往復させて一致を確認する
+function jstMidnight(y, mo, d) {
+  if (!(mo >= 1 && mo <= 12) || !(d >= 1 && d <= 31)) return null;
+  const ms = Date.UTC(y, mo - 1, d) - JST_OFFSET_MS;
+  const f = jstFields(ms);
+  if (f.y !== y || f.mo !== mo || f.d !== d) return null; // 2/30 → 3/2 のような繰り上がり
+  return ms;
+}
 function msToDateStr(ms) { const f = jstFields(ms); return f.y + '-' + p2(f.mo) + '-' + p2(f.d); }
 
 // 全角→半角。数字・英字・記号・空白のみ変換する
@@ -41,7 +48,8 @@ function extractDate(text, nowMs) {
   const today = jstFields(nowMs);
   const todayMs = jstMidnight(today.y, today.mo, today.d);
 
-  function hit(ms, m) { return { dateMs: ms, index: m.index, length: m[0].length }; }
+  // dateMs が null（存在しない日付）なら「日付を読めなかった」として扱う
+  function hit(ms, m) { return ms === null ? null : { dateMs: ms, index: m.index, length: m[0].length }; }
 
   // 年が明示された日付: 2026-07-22 / 2026/7/22
   let m = text.match(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);
@@ -58,6 +66,13 @@ function extractDate(text, nowMs) {
     m = text.match(r.re);
     if (m) return hit(todayMs + r.off * DAY_MS, m);
   }
+
+  // 「N日後」「N週間後」。下の「日のみ(22日)」より先に見ないと
+  // 「3日後」の "3日" が当月3日として食われる
+  m = text.match(/(\d{1,2})\s*日\s*後/);
+  if (m) return hit(todayMs + (+m[1]) * DAY_MS, m);
+  m = text.match(/(\d{1,2})\s*週間?\s*後/);
+  if (m) return hit(todayMs + (+m[1]) * 7 * DAY_MS, m);
 
   // 月日: 7月22日 / 7月22
   m = text.match(/(\d{1,2})\s*月\s*(\d{1,2})\s*日?/);
@@ -77,7 +92,8 @@ function extractDate(text, nowMs) {
   if (m) return hit(resolveMonthDay(+m[1], +m[2], todayMs), m);
 
   // 曜日（「曜」必須。旧実装のような1文字マッチはしない）
-  m = text.match(/(今週|来週|再来週|らいしゅう)?\s*([日月火水木金土])\s*曜\s*日?/);
+  // 「来週の水曜」のように助詞が挟まる形を落とすと1週間ずれるため の? を許容する
+  m = text.match(/(今週|来週|再来週|らいしゅう)?\s*の?\s*([日月火水木金土])\s*曜\s*日?/);
   if (m) {
     const dow = WEEKDAY[m[2]];
     const t = jstFields(todayMs);
@@ -113,9 +129,10 @@ function extractDate(text, nowMs) {
 // 年が書かれていない月日は、過ぎていれば翌年とみなす
 function resolveMonthDay(mo, day, todayMs) {
   const t = jstFields(todayMs);
-  let ms = jstMidnight(t.y, mo, day);
-  if (ms < todayMs) ms = jstMidnight(t.y + 1, mo, day);
-  return ms;
+  const ms = jstMidnight(t.y, mo, day);
+  if (ms === null) return null;          // 2/30 や 13月 など存在しない日付
+  if (ms >= todayMs) return ms;
+  return jstMidnight(t.y + 1, mo, day);  // 過ぎていれば翌年（閏日なら null になる）
 }
 
 // ---------------------------------------------------------------- 時刻の抽出
@@ -140,14 +157,16 @@ function readTime(s) {
   else if ((m = rest.match(/^(\d{1,2})\s*時/))) { h = +m[1]; mi = 0; }
   else if ((m = rest.match(/^(\d{2})(\d{2})(?!\d)/))) { h = +m[1]; mi = +m[2]; }
   else if ((m = rest.match(/^(\d)(\d{2})(?!\d)/))) { h = +m[1]; mi = +m[2]; }
-  else if ((m = rest.match(/^(\d{1,2})(?!\d)/))) { h = +m[1]; mi = 0; }
+  // 裸の1〜2桁は時刻の根拠にしない。「第2会議室」「3件の議題」の数字を
+  // 開始時刻(02:00/03:00)として拾ってしまう事故があったため、
+  // 「時」「:」「4桁」のいずれかの根拠がある場合のみ時刻とみなす
   else return null;
 
   if (ampm === 'pm' && h < 12) h += 12;
   if (ampm === 'am' && h === 12) h = 0;
   if (h > 24 || mi > 59) return null;
 
-  return { h: h, mi: mi, len: i + m[0].length, explicitAmPm: !!ampm };
+  return { h: h, mi: mi, len: i + m[0].length, ampm: ampm };
 }
 
 // 文中から最初の時刻トークンを探す
@@ -180,10 +199,20 @@ function parseDateTime(text, nowMs) {
              .replace(/\d{1,2}\s*(?:人|名)/g, ' ');
 
   const start = findTime(rest);
-  if (!start) return null;
+
+  // 「16-17」のように裸の数字だけで範囲を書く形。単独の裸数字は時刻の根拠に
+  // しないが、「数字-数字」の並びは範囲指定としての根拠がある。
+  // 実際の利用者が「4/28 16-17」と送ってくるため落とせない
+  if (!start) {
+    const br = rest.match(/(?:^|[^\d:])(\d{1,2})\s*[-–—〜~]\s*(\d{1,2})(?!\d)/);
+    if (br && +br[1] <= 24 && +br[2] <= 24) {
+      return finalize(+br[1], 0, +br[2], 0, null, null, d, nowMs);
+    }
+    return null;
+  }
 
   let sh = start.t.h, smi = start.t.mi;
-  let eh = null, emi = null;
+  let eh = null, emi = null, endAmPm = null;
 
   let after = rest.slice(start.index + start.t.len);
   const sep = after.match(SEP_RE);
@@ -198,14 +227,22 @@ function parseDateTime(text, nowMs) {
       eh = Math.floor(total / 60); emi = total % 60;
     } else {
       const end = readTime(after);
-      if (end) { eh = end.h; emi = end.mi; }
+      if (end) { eh = end.h; emi = end.mi; endAmPm = end.ampm; }
     }
   }
 
+  return finalize(sh, smi, eh, emi, start.t.ampm, endAmPm, d, nowMs);
+}
+
+// 開始・終了が決まったあとの共通処理（補正・30分丸め・妥当性検証）
+function finalize(sh, smi, eh, emi, startAmPm, endAmPm, d, nowMs) {
   if (eh === null) { eh = sh + 1; emi = smi; } // 終了未指定は1時間
 
-  // 「午後2時から4時」のように終了側の午前午後が省略された場合を補う
-  if (eh * 60 + emi <= sh * 60 + smi && eh + 12 <= 24) {
+  // 「午後2時から4時」のように終了側だけ午前午後が省略された場合を補う。
+  // 開始側が明示的に午後で、終了側に明示が無いときに限る。
+  // 無条件に +12 すると「10時から9時」という単なる打鍵ミスが
+  // 10:00-21:00（11時間）の予約になってしまうため。
+  if (eh * 60 + emi <= sh * 60 + smi && startAmPm === 'pm' && !endAmPm && eh + 12 <= 24) {
     eh += 12;
   }
 

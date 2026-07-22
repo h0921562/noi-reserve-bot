@@ -41,7 +41,7 @@ app.get('/', (req, res) => res.send('OK'));
 
 // デプロイ確認用。どのビルドが動いているかを外から判別するために置く。
 // 秘密情報は返さない。TZ は日付計算の前提確認に使う
-const BUILD = '2026-07-22-cancel-variants';
+const BUILD = '2026-07-22-critic-fixes';
 app.get('/version', (req, res) => res.json({
   build: BUILD,
   commit: process.env.RENDER_GIT_COMMIT || null,
@@ -112,21 +112,26 @@ async function handleEvent(event) {
         return;
       }
       if (st.list) {
-        const n = parseInt(zen2han(cleanText).replace(/[^\d]/g, ''), 10);
+        // 数字だけを抜き出すと「1時のやつ」が 1番 と解釈され、別の予約を消す。
+        // 番号だけが書かれている場合に限って選択とみなす
+        const m = zen2han(cleanText).match(/^\s*(\d{1,2})\s*(?:番|番目)?\s*$/);
+        const n = m ? parseInt(m[1], 10) : NaN;
         if (n >= 1 && n <= st.list.length) {
-          pendingCancels.delete(userId);
           const r = st.list[n - 1];
-          await executeCancel(replyToken, userId, r.date, (r.time || '').split('~')[0],
-            r.date + ' ' + r.time + ' ' + r.room);
+          // 選択後も即実行しない。期限超過なら課金されるため確認を挟む
+          await askCancelConfirm(replyToken, userId, r.date, (r.time || '').split('~')[0],
+            r.date + ' ' + r.time + ' ' + r.room, r.room);
           return;
         }
-        await reply(replyToken, '1〜' + st.list.length + ' の番号で選んでください（やめる場合は「いいえ」）');
+        await reply(replyToken,
+          '1〜' + st.list.length + ' の番号だけを送ってください（やめる場合は「いいえ」）');
         return;
       }
       if (st.confirm) {
         if (/^(はい|ok|OK|うん|了解|yes)$/i.test(cleanText)) {
           pendingCancels.delete(userId);
-          await executeCancel(replyToken, userId, st.confirm.date, st.confirm.startTime, st.confirm.label);
+          await executeCancel(replyToken, userId, st.confirm.date, st.confirm.startTime,
+            st.confirm.label, st.confirm.room);
           return;
         }
         await reply(replyToken, st.confirm.label + ' を取り消しますか？（はい / いいえ）');
@@ -191,7 +196,8 @@ async function handleEvent(event) {
           await reply(replyToken, '6階は埋まっています。4階で予約しますか？（OK / いいえ）');
         }
         return;
-      } else if (/^(いいえ|いや|やめる|no|やめ|なし|キャンセル|やめとく|やっぱ|やっぱり)/.test(cleanText) || /(?:キャンセル|やめ|いらない|なし|けし|消し|消す|消して|とりけし)/.test(cleanText)) {
+      // 「消しゴム買ってきて」で予約提案が破棄されるため、否定は明確な語に限る
+      } else if (/^(いいえ|いや|やめる|no|NO|やめ|なし|キャンセ[ルるりらろっ]*|やめとく|やっぱ|やっぱり|いらない|中止)$/i.test(cleanText)) {
         pendingConfirmations.delete(userId);
         await reply(replyToken, 'キャンセルしました');
         return;
@@ -209,12 +215,13 @@ async function handleEvent(event) {
     // コマンド分岐
     if (/^(予約一覧|一覧|予約みせて|予約見せて|予約ある|予約確認|リスト)/.test(cleanText)) {
       await handleList(replyToken, userId);
-    // 「キャンセる」のような口語の変化形も拾う。取りこぼすと新規予約として
-    // 処理されてしまい、取消のつもりが予約提案になる
-    } else if (/(?:取消|キャンセ[ルるりらろっ]*|やめたい|けし|消し|消す|消して|とりけし|とりやめ|取りやめ|取り消)/.test(cleanText)) {
+    // 「キャンセる」のような口語の変化形は拾うが、「消し」「消す」単体は拾わない。
+    // 「議事録の消し込みの件」のような業務語で取消と誤判定され、
+    // 同じ時間帯の既存予約が消える事故があったため
+    } else if (/(?:取消|取り消|キャンセ[ルるりらろっ]*|とりけし|とりやめ|取りやめ|やめたい|消して|消しとい|消去)/.test(cleanText)) {
       await handleCancel(replyToken, userId, cleanText);
     } else if (cleanText.startsWith('空き')) {
-      await handleCheckOnly(replyToken, cleanText);
+      await handleCheckOnly(replyToken, userId, cleanText);
     } else {
       // 予約リクエスト（日時パース）
       await handleReserve(replyToken, userId, cleanText);
@@ -306,7 +313,7 @@ async function handleReserve(replyToken, userId, text) {
 }
 
 // 空き確認のみ
-async function handleCheckOnly(replyToken, text) {
+async function handleCheckOnly(replyToken, userId, text) {
   const cleaned = text.replace(/^空き\s*/, '');
   const parsed = parseDateTime(cleaned);
   if (!parsed) {
@@ -315,14 +322,13 @@ async function handleCheckOnly(replyToken, text) {
   }
 
   const { date, startTime, endTime } = parsed;
-  await reply(replyToken, `${date} ${startTime}-${endTime} の空き状況を確認中...`);
-
   const availability = await checkAvailability(date, startTime, endTime);
 
   const lines = availability.rooms.map(r =>
     `${r.name}: ${r.available ? '空き' : '埋まり'}`
   );
-  await pushMessage(null, [`${date} ${startTime}-${endTime}`, ...lines].join('\n'));
+  // 以前は pushMessage(null, ...) で、userId が無いため結果が永久に届かなかった
+  await sendResult(replyToken, userId, [`${date} ${startTime}-${endTime}`, ...lines].join('\n'));
 }
 
 // 予約一覧
@@ -373,23 +379,46 @@ async function handleCancel(replyToken, userId, text) {
     return;
   }
 
-  const label = parsed.date + ' ' + parsed.startTime;
-  const deadlineMs = jstToMs(parsed.date, parsed.startTime) - 2 * 60 * 60 * 1000;
+  // 日時が読めても、その時間に複数の会議室が入っていることがある。
+  // 日付と開始時刻だけで消すと別の階の予約を消してしまうため、実物と突き合わせる
+  const all = await getReservations();
+  let matches = all.filter(function (r) {
+    return r.date === parsed.date && (r.time || '').indexOf(parsed.startTime) === 0;
+  });
 
-  // 期限を過ぎた取消は課金される。実行せず確認を取る
-  if (Date.now() > deadlineMs) {
-    await askCancelConfirm(replyToken, userId, parsed.date, parsed.startTime, label);
+  // 本文に階の指定があれば絞り込む
+  const floorHint = /4\s*(?:階|F|f)|よん\s*かい/.test(text) ? '4階'
+    : /6\s*(?:階|F|f)|ろく\s*かい|ろっかい/.test(text) ? '6階' : null;
+  if (floorHint) {
+    const narrowed = matches.filter(function (r) { return (r.room || '').indexOf(floorHint) === 0; });
+    if (narrowed.length) matches = narrowed;
+  }
+
+  if (matches.length === 0) {
+    await sendResult(replyToken, userId,
+      parsed.date + ' ' + parsed.startTime + ' の予約は見つかりませんでした。\n「予約一覧」で確認できます');
+    return;
+  }
+  if (matches.length > 1) {
+    const lines = matches.map(function (r, i) { return (i + 1) + '. ' + r.date + ' ' + r.time + ' ' + r.room; });
+    setPendingCancel(userId, { list: matches });
+    await sendResult(replyToken, userId,
+      'その時間に複数の予約があります。どれを取り消しますか？\n\n' + lines.join('\n') +
+      '\n\n番号を送ってください（やめる場合は「いいえ」）');
     return;
   }
 
-  await executeCancel(replyToken, userId, parsed.date, parsed.startTime, label);
+  const r = matches[0];
+  await askCancelConfirm(replyToken, userId, r.date, (r.time || '').split('~')[0],
+    r.date + ' ' + r.time + ' ' + r.room, r.room);
 }
 
-// 取消前の確認。期限を過ぎている場合は課金される旨も伝える
-async function askCancelConfirm(replyToken, userId, date, startTime, label) {
+// 取消前の確認。すべての取消経路をここに集約する。
+// 期限チェックもここで一度だけ行い、経路によって確認が抜ける状態を作らない
+async function askCancelConfirm(replyToken, userId, date, startTime, label, room) {
   const deadlineMs = jstToMs(date, startTime) - 2 * 60 * 60 * 1000;
   const late = Date.now() > deadlineMs;
-  setPendingCancel(userId, { confirm: { date: date, startTime: startTime, label: label } });
+  setPendingCancel(userId, { confirm: { date: date, startTime: startTime, label: label, room: room } });
   await sendResult(replyToken, userId,
     (late
       ? 'キャンセル期限（開始2時間前: ' + formatDateTime(deadlineMs) + '）を過ぎています。\n取り消すと料金が発生します。\n\n'
@@ -397,8 +426,9 @@ async function askCancelConfirm(replyToken, userId, date, startTime, label) {
     label + ' を取り消しますか？（はい / いいえ）');
 }
 
-async function executeCancel(replyToken, userId, date, startTime, label) {
-  const result = await cancelReservation(date, startTime);
+// 実際に取り消す。呼び出し元は askCancelConfirm の「はい」だけにすること
+async function executeCancel(replyToken, userId, date, startTime, label, room) {
+  const result = await cancelReservation(date, startTime, room);
   await sendResult(replyToken, userId,
     result.success ? label + ' を取り消しました' : '取消に失敗しました: ' + result.error);
 }
