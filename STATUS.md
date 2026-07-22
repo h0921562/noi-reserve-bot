@@ -66,7 +66,7 @@ webhookが発火しない（082ad6d を push 後10分間 404 のままだった�
 - [ ] P0: **botが返すエラー文面を受領し、無料枠の枯渇原因を確定する**（下記「未確定」参照）
 - [ ] P0: 上の「予約一覧と空き確認の矛盾」を調査する（二重予約のリスク）
 - [ ] P1: 予約フローの push→reply 移行（現状 予約1件で push 2通、グループでは人数倍）
-- [ ] P1: critic による独立レビュー（L2該当のため）と品質記録の作成
+- [x] P1: critic による独立レビューを起動・品質記録を作成し quality_gate.py を通過（`.claude/quality_system/records/2026-07-22-noi-reserve-bot-datetime-cancel.json`、STRUCTURE PASS）。**レビュー結果の反映は未了**
 - [ ] P2: `reserve.js` が操作のたびに `login()` で5往復している無駄の解消（応答が7〜10秒かかる一因）
 
 ## 判断・前提
@@ -77,8 +77,9 @@ webhookが発火しない（082ad6d を push 後10分間 404 のままだった�
   - Render 750h/月（ワークスペース共有）。[index.js](index.js) の14分セルフpingで本botだけで744h/月を消費する計算
   - LINE 200通/月。push のみ課金・**グループでは人数分カウント**（公式ドキュメントで確認済み）
   - Groq / Anthropic のレート制限（議事録機能のみ使用）
-- 未確認: Render の環境変数 `TZ` が `Asia/Tokyo` か。未設定なら旧実装は早朝に日付がずれていた
-- 未確認: Render の自動デプロイ（GitHub push で反映されるか）
+- 判明済み: Render の `TZ` は**未設定＝UTC稼働**（`/version` が `tz:null` / `serverTime` がUTCを返す）。
+  旧実装は JST 00:00-09:00 に日付が1日ずれていた。現在は JST 固定なので影響しない
+- 判明済み: Render の自動デプロイは**設定Onでも発火しない**。毎回 Manual Deploy が要る（上記手順）
 
 ## リスク・ブロッカー
 
@@ -89,9 +90,9 @@ webhookが発火しない（082ad6d を push 後10分間 404 のままだった�
 ## 再開手順
 
 1. 最初に読む: 本ファイルと [会議室予約自動化_設計メモ.md](../会議室予約自動化_設計メモ.md)
-2. テスト: `cd projects/NOI/雑務/noi-reserve-bot && npm test`（53ケース＋5シナリオ）
-3. 修正前との比較: `test/result_baseline.json`（26/53）と突き合わせる
-4. デプロイ: 未確認。Render の自動デプロイ設定を確認してから
+2. テスト: `cd projects/NOI/雑務/noi-reserve-bot && npm test`（55ケース＋9シナリオ）
+3. 修正前との比較: `TZ=Asia/Tokyo node test/run.js baseline`（26/53）と突き合わせる
+4. デプロイ: 上の「デプロイ手順（重要）」に従う。push だけでは反映されない
 
 ## 関連ファイル
 
