@@ -3,8 +3,8 @@ project: NOI/雑務/noi-reserve-bot
 status: in_progress
 health: at_risk
 updated: 2026-07-22
-summary: 日時パースと取消フローを修正し本番push済み(082ad6d)。反映確認は /version で行う。無料枠枯渇の原因は未確定
-next_action: /version で反映を確認しLINEで実機検証する。無料枠のエラー文面を受領して原因を確定する
+summary: 修正をpush済み(082ad6d)だがRenderが拾わず本番は旧コードのまま。ダッシュボードでの手動デプロイ待ち
+next_action: RenderダッシュボードでAuto-Deploy設定を確認し手動デプロイする。/version が返れば反映完了
 ---
 
 # 会議室予約bot — 進捗と引き継ぎ
@@ -13,7 +13,9 @@ next_action: /version で反映を確認しLINEで実機検証する。無料枠
 
 - 目的: LINEから日総第２２ビルの会議室（4階共用/6階）を予約・空き確認・取消する
 - ホスト: **Render 無料プラン**（`https://noi-reserve-bot.onrender.com`）。GitHub `h0921562/noi-reserve-bot`
-- 2026-07-22: 日時パースの重大バグ群と取消フローを修正し、`082ad6d` を origin/main へ push（本番反映）
+- 2026-07-22: 日時パースの重大バグ群と取消フローを修正し、`082ad6d` を origin/main へ push
+  - **ただし Render は10分待っても拾わず、本番は旧コードのまま**。`git push` では反映されない構成
+  - Render の API キー・CLI ともにこの環境に無く、ダッシュボードからの操作が必要
 
 ## 反映の確認方法
 
