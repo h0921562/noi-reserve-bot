@@ -332,9 +332,11 @@ async function handleCancel(replyToken, userId, text) {
       await sendResult(replyToken, userId, '現在の予約はありません');
       return;
     }
+    // 1件だけでも即実行はしない。利用者が指定した日時を読めていない以上、
+    // botが対象を推測している状態であり、取消は不可逆で課金もありうる
     if (reservations.length === 1) {
       const r = reservations[0];
-      await executeCancel(replyToken, userId, r.date, (r.time || '').split('~')[0],
+      await askCancelConfirm(replyToken, userId, r.date, (r.time || '').split('~')[0],
         r.date + ' ' + r.time + ' ' + r.room);
       return;
     }
@@ -353,14 +355,23 @@ async function handleCancel(replyToken, userId, text) {
 
   // 期限を過ぎた取消は課金される。実行せず確認を取る
   if (Date.now() > deadlineMs) {
-    setPendingCancel(userId, { confirm: { date: parsed.date, startTime: parsed.startTime, label: label } });
-    await sendResult(replyToken, userId,
-      'キャンセル期限（開始2時間前: ' + formatDateTime(deadlineMs) + '）を過ぎています。\n' +
-      '取り消すと料金が発生します。\n\n' + label + ' を取り消しますか？（はい / いいえ）');
+    await askCancelConfirm(replyToken, userId, parsed.date, parsed.startTime, label);
     return;
   }
 
   await executeCancel(replyToken, userId, parsed.date, parsed.startTime, label);
+}
+
+// 取消前の確認。期限を過ぎている場合は課金される旨も伝える
+async function askCancelConfirm(replyToken, userId, date, startTime, label) {
+  const deadlineMs = jstToMs(date, startTime) - 2 * 60 * 60 * 1000;
+  const late = Date.now() > deadlineMs;
+  setPendingCancel(userId, { confirm: { date: date, startTime: startTime, label: label } });
+  await sendResult(replyToken, userId,
+    (late
+      ? 'キャンセル期限（開始2時間前: ' + formatDateTime(deadlineMs) + '）を過ぎています。\n取り消すと料金が発生します。\n\n'
+      : '') +
+    label + ' を取り消しますか？（はい / いいえ）');
 }
 
 async function executeCancel(replyToken, userId, date, startTime, label) {

@@ -137,6 +137,16 @@ function check(label, cond, detail) {
     JSON.stringify(fakeSite.reservations));
   console.log('     消費: ' + counts());
 
+  console.log('\n■ シナリオ3b: 日時が読めず予約が1件のとき、勝手に取り消さない');
+  reset();
+  fakeSite.reservations = [{ date: iso, time: '10:00~11:00', room: '6階 会議室' }];
+  await say('4/28をキャンセル'); // 過去日なので日時として解決できない
+  check('即実行せず確認を求めた',
+    fakeSite.reservations.length === 1 && /取り消しますか/.test(sent.reply.concat(sent.push).join('\n')),
+    '残: ' + JSON.stringify(fakeSite.reservations) + ' / 応答: ' + sent.reply.concat(sent.push).join(' | '));
+  await say('いいえ');
+  check('「いいえ」で取り消されずに済む', fakeSite.reservations.length === 1, JSON.stringify(fakeSite.reservations));
+
   console.log('\n■ シナリオ4: 期限超過の取消は確認を挟む');
   reset();
   const near = futureDate(0);
