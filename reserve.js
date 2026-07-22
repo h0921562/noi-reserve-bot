@@ -166,21 +166,6 @@ async function makeReservation(date, startTime, endTime, roomId) {
   return { success: true, password: created[0].e_key || null };
 }
 
-async function getLatestPassword(date, startTime) {
-  var r = await axios.get(BASE_URL + '/rsr', { headers: { Cookie: getCookie() } });
-  var $ = cheerio.load(r.data);
-  var password = null;
-  $('table tbody tr').each(function() {
-    var cells = $(this).find('td');
-    if (cells.length >= 6) {
-      var pw = $(cells[0]).text().trim();
-      var dateText = $(cells[1]).text().trim();
-      var timeText = $(cells[2]).text().trim();
-      if (dateText.indexOf(date) >= 0 && timeText.indexOf(startTime) >= 0) password = pw;
-    }
-  });
-  return password;
-}
 
 async function getReservationPage() {
   var token = await login();
@@ -202,9 +187,13 @@ function parseReservationList(html) {
   try { return JSON.parse(match[1]); } catch(e) { return null; }
 }
 
+// 一覧を読み取れなかった場合は null を返す。[] に潰すと呼び出し元が
+// 「予約はありません」と断定してしまい、利用者は取り消せていないことに
+// 気づけないままキャンセル期限が過ぎて課金される
 async function getReservations() {
   var html = await getReservationPage();
-  var list = parseReservationList(html) || [];
+  var list = parseReservationList(html);
+  if (list === null) return null;
   return list.map(function(r) {
     return {
       rsr_id: r.rsr_id,

@@ -41,7 +41,7 @@ app.get('/', (req, res) => res.send('OK'));
 
 // デプロイ確認用。どのビルドが動いているかを外から判別するために置く。
 // 秘密情報は返さない。TZ は日付計算の前提確認に使う
-const BUILD = '2026-07-22-critic-r2';
+const BUILD = '2026-07-22-critic-r3';
 app.get('/version', (req, res) => res.json({
   build: BUILD,
   commit: process.env.RENDER_GIT_COMMIT || null,
@@ -170,17 +170,19 @@ async function handleEvent(event) {
             st.confirm.label, st.confirm.room);
           return;
         }
-        // 別の予約の取消を言い直した場合はやり直す。以前は「はい」以外を
-        // すべて同じ確認の再掲に落としていたため、訂正が黙って無視され、
-        // 言い直す前の予約が消えていた
-        if (CANCEL_RE.test(cleanText) || parseDateTime(stripCancelKeyword(cleanText))) {
+        // 別の予約の取消を言い直した場合はやり直す。ただし「取消の意図が
+        // 明示されている」ことを要求する。日時が読めるだけで取消に倒すと、
+        // 確認中に送った予約依頼が取消確認に化け、「はい」で別の予約が消える
+        if (CANCEL_RE.test(cleanText)) {
           pendingCancels.delete(userId);
           await handleCancel(replyToken, userId, ctx, cleanText);
           return;
         }
+        const wantsReserve = /予約|押さえ|取って|とって|空き|空いて/.test(cleanText);
         await reply(replyToken,
+          (wantsReserve ? '先に取消の確認にお答えください。\n\n' : '') +
           st.confirm.label + ' を取り消しますか？（はい / いいえ）\n' +
-          '別の予約を取り消す場合は、その日時を送ってください');
+          '別の予約を取り消す場合は「取消 7/28 14時」のように送ってください');
         return;
       }
     }
@@ -390,6 +392,12 @@ async function handleList(replyToken, userId) {
   await reply(replyToken, '予約一覧を取得中...');
 
   const reservations = await getReservations();
+  // null は「読み取れなかった」。[] と同じに扱うと「予約はありません」と
+  // 断定してしまい、利用者は取り消せていないことに気づけない
+  if (reservations === null) {
+    await sendResult(replyToken, userId, '予約一覧を読み取れませんでした。時間をおいて再度お試しください');
+    return;
+  }
   if (reservations.length === 0) {
     await pushMessage(userId, '現在の予約はありません');
     return;
@@ -411,6 +419,10 @@ async function handleCancel(replyToken, userId, ctx, text) {
   // 日時が読めなかった場合は予約一覧から選ばせる
   if (!parsed) {
     const reservations = await getReservations();
+    if (reservations === null) {
+      await sendResult(replyToken, userId, '予約一覧を読み取れませんでした。時間をおいて再度お試しください');
+      return;
+    }
     if (reservations.length === 0) {
       await sendResult(replyToken, userId, '現在の予約はありません');
       return;
@@ -436,6 +448,10 @@ async function handleCancel(replyToken, userId, ctx, text) {
   // 日時が読めても、その時間に複数の会議室が入っていることがある。
   // 日付と開始時刻だけで消すと別の階の予約を消してしまうため、実物と突き合わせる
   const all = await getReservations();
+  if (all === null) {
+    await sendResult(replyToken, userId, '予約一覧を読み取れませんでした。時間をおいて再度お試しください');
+    return;
+  }
   let matches = all.filter(function (r) {
     return r.date === parsed.date && (r.time || '').indexOf(parsed.startTime) === 0;
   });

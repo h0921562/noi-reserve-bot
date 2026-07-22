@@ -14,6 +14,7 @@ let replyTokenShouldFail = false;
 // --- 予約サイトの差し替え（状態を持つフェイク） ---
 const fakeSite = {
   reservations: [],
+  listUnreadable: false, // 一覧を読み取れない状況（ログイン切れ等）
   availability: { '42': true, '25': true },
 };
 
@@ -29,7 +30,7 @@ const reserveStub = {
     fakeSite.reservations.push({ date, time: s + '~' + e, room: roomId === '42' ? '6階 会議室' : '4階 共用会議室' });
     return { success: true, password: '1234' };
   },
-  getReservations: async () => fakeSite.reservations.slice(),
+  getReservations: async () => (fakeSite.listUnreadable ? null : fakeSite.reservations.slice()),
   // 本物と同じく会議室も照合する（room を無視すると別の階を消す事故が再現できない）
   cancelReservation: async (date, startTime, room) => {
     const i = fakeSite.reservations.findIndex(r =>
@@ -381,6 +382,39 @@ function check(label, cond, detail) {
   await say('はい'); // 元のDMでなら確定できる
   check('元のトークでは確定できる', fakeSite.reservations.length === 0,
     JSON.stringify(fakeSite.reservations));
+
+  console.log('\n■ シナリオ17: 取消確認中の予約依頼が取消に化けない（X1）');
+  reset();
+  fakeSite.reservations = [{ date: farIso, time: '14:00~15:00', room: '6階 会議室' }];
+  await say(far.m + '/' + far.d + ' 14時をキャンセル');
+  clearLog();
+  await say(far.m + '/' + far.d + ' 14時から15時で予約お願いします'); // 予約依頼
+  const r17 = sent.reply.concat(sent.push).join('\n');
+  // 危険なのは「1回目と一字一句同じ確認文」が返ること。それだと利用者は
+  // 予約依頼が通ったと思って「はい」を押し、別の意味の操作が走る
+  check('予約依頼だと分かる応答を返す（同じ確認文の再掲にしない）',
+    /先に取消の確認/.test(r17), r17);
+  check('この時点で予約は増えていない', fakeSite.reservations.length === 1,
+    JSON.stringify(fakeSite.reservations));
+  clearLog();
+  await say('いいえ');
+  check('「いいえ」で取消をやめれば予約は残る',
+    fakeSite.reservations.length === 1 && fakeSite.reservations[0].time === '14:00~15:00',
+    JSON.stringify(fakeSite.reservations));
+
+  console.log('\n■ シナリオ18: 一覧が読めないとき「予約はありません」と言わない（X3）');
+  reset();
+  fakeSite.reservations = [{ date: farIso, time: '14:00~15:00', room: '6階 会議室' }];
+  fakeSite.listUnreadable = true;
+  await say('予約一覧');
+  const r18a = sent.reply.concat(sent.push).join('\n');
+  check('一覧で「予約はありません」と断定しない', !/予約はありません/.test(r18a), r18a);
+  check('読み取れなかったと伝える', /読み取れません/.test(r18a), r18a);
+  reset();
+  await say('キャンセルしたい');
+  const r18b = sent.reply.concat(sent.push).join('\n');
+  check('取消でも「予約はありません」と断定しない', !/予約はありません/.test(r18b), r18b);
+  fakeSite.listUnreadable = false;
 
   console.log('\n■ シナリオ5: 応答トークンが切れたときの push フォールバック');
   reset();

@@ -27,11 +27,25 @@ const brokenPage = '<html><body><input name="_token" value="T">ログインし�
 // site: { pages: {}, onDelete, onRegist } を差し替えて挙動を作る
 function loadReserve(site) {
   const src = fs.readFileSync(path.join(ROOT, 'reserve.js'), 'utf8');
+  // 送信ボディを記録する。URLしか見ないスタブでは「正しい対象を選んだ上で
+  // 別のIDをPOSTする」「全部屋の枠をPOSTする」といった、この層で最も避けたい
+  // 事故を原理的に検出できない（変異テストで実証済み）
+  site.sent = { delete: [], regist: [] };
   const fakeAxios = {
     get: async (url) => ({ headers: {}, data: site.pageFor(url, 'get') }),
-    post: async (url) => {
-      if (/\/rsr\/delete/.test(url) && site.onDelete) site.onDelete();
-      if (/\/rsr\/regist\/active/.test(url) && site.onRegist) site.onRegist();
+    post: async (url, body) => {
+      const params = new URLSearchParams(body || '');
+      if (/\/rsr\/delete/.test(url)) {
+        site.sent.delete.push({ rsr_id: params.get('rsr_id') });
+        if (site.onDelete) site.onDelete();
+      }
+      if (/\/rsr\/regist\/active/.test(url)) {
+        site.sent.regist.push({
+          date: params.get('reservation_date'),
+          slots: params.getAll('check[]'),
+        });
+        if (site.onRegist) site.onRegist();
+      }
       return { headers: {}, data: site.pageFor(url, 'post') };
     },
   };
@@ -53,6 +67,9 @@ function loadReserve(site) {
     };
     const r = await loadReserve(site).cancelReservation('2026-08-01', '14:00', '6階 会議室');
     check('success を返す', r.success === true, JSON.stringify(r));
+    check('削除POSTに対象の rsr_id を送っている',
+      site.sent.delete.length === 1 && site.sent.delete[0].rsr_id === '1',
+      JSON.stringify(site.sent.delete));
   }
 
   console.log('\n■ 取消: 一覧のパースに失敗したら成功を名乗らない（N3）');
@@ -90,6 +107,9 @@ function loadReserve(site) {
     };
     const r = await loadReserve(site).cancelReservation('2026-08-01', '14:00', '4階 共用会議室');
     check('4階を指定して4階が消える', r.success === true && deletedId === 2, JSON.stringify(r));
+    check('削除POSTに4階側の rsr_id を送っている',
+      site.sent.delete.length === 1 && site.sent.delete[0].rsr_id === '2',
+      JSON.stringify(site.sent.delete));
   }
 
   console.log('\n■ 予約: 他室の予約を自分の成功と誤認しない（N4）');
@@ -114,6 +134,14 @@ function loadReserve(site) {
     const r = await loadReserve(site).makeReservation('2026-08-01', '14:00', '15:00', '42');
     check('success を返す', r.success === true, JSON.stringify(r));
     check('自室のパスワードを返す', r.password === '5555', JSON.stringify(r));
+    // 指定した部屋の枠だけを送っているか。全部屋を送ると両方押さえてしまう
+    const slots = site.sent.regist[0] ? site.sent.regist[0].slots : [];
+    check('登録POSTが6階(42)の枠だけを含む',
+      slots.length === 2 && slots.every(v => v.endsWith('/42')),
+      JSON.stringify(slots));
+    check('登録POSTが要求した時間帯の枠だけを含む',
+      slots.includes('0/14:00/42') && slots.includes('0/14:30/42'),
+      JSON.stringify(slots));
   }
 
   console.log('\n' + (failures ? '❌ 失敗 ' + failures + ' 件' : '✅ reserve.js 全ケース合格'));
