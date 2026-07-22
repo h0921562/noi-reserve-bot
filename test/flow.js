@@ -200,6 +200,24 @@ function check(label, cond, detail) {
     fakeSite.reservations.length === 1 && fakeSite.reservations[0].date === '2026-07-10',
     JSON.stringify(fakeSite.reservations));
 
+  console.log('\n■ シナリオ6d: 実機の再現（「4/28をキャンセル」→「2」）9:29のトーク');
+  reset();
+  fakeSite.reservations = [
+    { date: '2026-07-28', time: '16:00~17:00', room: '6階 会議室' },
+    { date: '2027-04-28', time: '16:00~17:00', room: '6階 会議室' },
+  ];
+  await say('4/28をキャンセル'); // 時刻がないので日時としては確定できない
+  check('一覧が提示された', /どの予約を取り消しますか/.test(sent.reply.concat(sent.push).join('\n')),
+    sent.reply.concat(sent.push).join(' | '));
+  reset();
+  await say('2');
+  const r6d = sent.reply.concat(sent.push).join('\n');
+  check('「2」が日時として解釈されない（旧実装はここで「日時を認識できませんでした」）',
+    !/日時を認識できませんでした/.test(r6d), r6d);
+  check('2件目(2027-04-28)だけが取り消された',
+    fakeSite.reservations.length === 1 && fakeSite.reservations[0].date === '2026-07-28',
+    JSON.stringify(fakeSite.reservations));
+
   console.log('\n■ シナリオ5: 応答トークンが切れたときの push フォールバック');
   reset();
   fakeSite.reservations = [{ date: iso, time: '10:00~11:00', room: '6階 会議室' }];
