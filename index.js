@@ -41,7 +41,7 @@ app.get('/', (req, res) => res.send('OK'));
 
 // デプロイ確認用。どのビルドが動いているかを外から判別するために置く。
 // 秘密情報は返さない。TZ は日付計算の前提確認に使う
-const BUILD = '2026-07-22-critic-fixes';
+const BUILD = '2026-07-22-critic-fixes-2';
 app.get('/version', (req, res) => res.json({
   build: BUILD,
   commit: process.env.RENDER_GIT_COMMIT || null,
@@ -96,7 +96,16 @@ async function handleEvent(event) {
   // グループの場合はメンションされてるかチェック（確認待ちユーザーは除く）
   if (event.source.type === 'group' || event.source.type === 'room') {
     const mention = event.message.mention;
-    if (!mention && !text.startsWith('@') && !pendingConfirmations.has(userId) && !pendingCancels.has(userId)) return;
+    const waiting = pendingConfirmations.has(userId) || pendingCancels.has(userId);
+    const mentionees = (mention && Array.isArray(mention.mentionees)) ? mention.mentionees : [];
+    // メンション先がbot自身かを見る。以前は誰宛でも起動していたため、
+    // 同僚宛の雑談で予約提案が立ち上がり push 枠も消費していた。
+    // isSelf を返さない環境では判定できないので従来どおり反応する（保守的）
+    const toBot = mentionees.some(function (m) { return m.isSelf === true || m.type === 'all'; });
+    const toOthersOnly = mentionees.length > 0 && !toBot &&
+      mentionees.every(function (m) { return m.isSelf === false; });
+    if (toOthersOnly && !waiting) return;
+    if (!mention && !text.startsWith('@') && !waiting) return;
   }
 
   // メンション部分を除去
@@ -296,6 +305,12 @@ async function handleReserve(replyToken, userId, text) {
     ? `⚠️ ${date} は約${Math.round(daysAhead / 30)}ヶ月先です。年が正しいか確認してください`
     : '';
 
+  // 予約サイトは30分刻み。指定が刻みに乗っていない場合は丸めた事実を伝える
+  // （黙って別の時間帯を押さえないため）
+  const snapWarning = parsed.snapped
+    ? `⚠️ 30分単位に調整しました（${startTime}-${endTime}）`
+    : '';
+
   const otherRoom = selectedRoom.id === '42' ? room4 : room6;
   const msg = [
     `${selectedRoom.name} が空いています`,
@@ -303,6 +318,7 @@ async function handleReserve(replyToken, userId, text) {
     `日時: ${date} ${startTime}-${endTime}`,
     `キャンセル期限: ${cancelDeadline}`,
     farWarning,
+    snapWarning,
     '',
     `${selectedRoom.name}を予約しますか？（OK / いいえ）`,
   ].filter(Boolean).join('\n');

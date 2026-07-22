@@ -327,6 +327,26 @@ function check(label, cond, detail) {
     !/キャンセルしました/.test(sent.reply.concat(sent.push).join('\n')),
     sent.reply.concat(sent.push).join(' | '));
 
+  console.log('\n■ シナリオ13: 30分刻みに丸めたことを伝える');
+  reset(); fakeSite.reservations = [];
+  await say(far.m + '/' + far.d + ' 14:10-15:50');
+  const r13 = sent.reply.concat(sent.push).join('\n');
+  check('丸めた事実を伝えている', /30分単位に調整/.test(r13), r13);
+  check('丸めた後の時間が提示されている', /14:00-16:00/.test(r13), r13);
+
+  console.log('\n■ シナリオ14: グループで他人宛メンションには反応しない');
+  reset(); fakeSite.reservations = [];
+  await bot.handleEvent({
+    type: 'message',
+    message: { type: 'text', text: '@田中 ' + far.m + '/' + far.d + ' 14時から16時 空いてる?',
+      mention: { mentionees: [{ index: 0, length: 3, userId: 'U_tanaka', isSelf: false }] } },
+    source: { type: 'group', groupId: 'G1', userId: currentUser },
+    replyToken: 'RTg' + (++tokenSeq),
+  });
+  check('反応しない（push枠も消費しない）',
+    sent.reply.length === 0 && sent.push.length === 0,
+    'reply=' + JSON.stringify(sent.reply) + ' push=' + JSON.stringify(sent.push));
+
   console.log('\n■ シナリオ5: 応答トークンが切れたときの push フォールバック');
   reset();
   fakeSite.reservations = [{ date: iso, time: '10:00~11:00', room: '6階 会議室' }];
