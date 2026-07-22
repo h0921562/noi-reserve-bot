@@ -112,6 +112,31 @@ function loadReserve(site) {
       JSON.stringify(site.sent.delete));
   }
 
+  console.log('\n■ 一覧取得: 読み取れないときは null を返す（X3の本体）');
+  {
+    const site = { pageFor: () => brokenPage };
+    const r = await loadReserve(site).getReservations();
+    check('null を返す（[] に潰さない）', r === null, JSON.stringify(r));
+  }
+
+  console.log('\n■ 一覧取得: 予約が無いときは空配列を返す');
+  {
+    const site = { pageFor: () => listPage([]) };
+    const r = await loadReserve(site).getReservations();
+    check('[] を返す（null と区別する）', Array.isArray(r) && r.length === 0, JSON.stringify(r));
+  }
+
+  console.log('\n■ 一覧取得: 正常系は整形して返す');
+  {
+    const rows = [{ rsr_id: 3, rsr_date: '2026-08-01', start_time: '14:00:00', end_time: '15:00:00', room_name: '6階 会議室', e_key: '7777', tenant_name: 'T', office_name: 'O' }];
+    const site = { pageFor: () => listPage(rows) };
+    const r = await loadReserve(site).getReservations();
+    check('日時・会議室・パスワードを取り出す',
+      r.length === 1 && r[0].date === '2026-08-01' && r[0].time === '14:00~15:00' &&
+      r[0].room === '6階 会議室' && r[0].password === '7777',
+      JSON.stringify(r));
+  }
+
   console.log('\n■ 予約: 他室の予約を自分の成功と誤認しない（N4）');
   {
     // 一覧には 4階 14:00 しかない。6階(42) の登録はサイトが受け付けない
@@ -140,8 +165,30 @@ function loadReserve(site) {
       slots.length === 2 && slots.every(v => v.endsWith('/42')),
       JSON.stringify(slots));
     check('登録POSTが要求した時間帯の枠だけを含む',
-      slots.includes('0/14:00/42') && slots.includes('0/14:30/42'),
+      slots.length === 2 && slots.includes('0/14:00/42') && slots.includes('0/14:30/42'),
       JSON.stringify(slots));
+    check('要求範囲外(13:30 や 15:00 以降)の枠を含まない',
+      !slots.some(v => /13:30|15:00|15:30|16:00/.test(v)),
+      JSON.stringify(slots));
+  }
+
+  console.log('\n■ 予約: 確認の読み直しが通信エラーでも例外を投げない（E1）');
+  {
+    let registered = false;
+    const site = {
+      pageFor: (url) => {
+        if (/regist\/search/.test(url)) return slotPage();
+        if (registered) throw new Error('socket hang up'); // 読み直しだけ落ちる
+        return listPage([]);
+      },
+      onRegist: () => { registered = true; },
+    };
+    let r, threw = false;
+    try { r = await loadReserve(site).makeReservation('2026-08-01', '14:00', '15:00', '42'); }
+    catch (e) { threw = true; r = { thrown: e.message }; }
+    check('例外を投げずに結果を返す', !threw, JSON.stringify(r));
+    check('確認できなかったと伝える', r && r.success === false && /確認できません/.test(r.error || ''),
+      JSON.stringify(r));
   }
 
   console.log('\n' + (failures ? '❌ 失敗 ' + failures + ' 件' : '✅ reserve.js 全ケース合格'));
@@ -151,7 +198,9 @@ function loadReserve(site) {
 // 空き状況グリッドのページ（チェックボックスの value は {index}/{HH:MM}/{room_id}）
 function slotPage() {
   let boxes = '';
-  for (const t of ['14:00', '14:30']) {
+  // 要求範囲(14:00-15:00)の外にも枠を置く。2枠しか無いと
+  // 「開始以降の全枠をPOSTする」変異が要求範囲と一致して素通りする
+  for (const t of ['13:30', '14:00', '14:30', '15:00', '15:30', '16:00']) {
     for (const room of ['42', '25']) {
       boxes += '<input type="checkbox" value="0/' + t + '/' + room + '">';
     }

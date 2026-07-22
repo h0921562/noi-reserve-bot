@@ -41,7 +41,7 @@ app.get('/', (req, res) => res.send('OK'));
 
 // デプロイ確認用。どのビルドが動いているかを外から判別するために置く。
 // 秘密情報は返さない。TZ は日付計算の前提確認に使う
-const BUILD = '2026-07-22-critic-r3';
+const BUILD = '2026-07-22-critic-r4';
 app.get('/version', (req, res) => res.json({
   build: BUILD,
   commit: process.env.RENDER_GIT_COMMIT || null,
@@ -142,7 +142,13 @@ async function handleEvent(event) {
     // 取消の選択待ち・確認待ちの処理（予約の確認待ちより先に見る）
     if (hasCancelState) {
       const st = cancelState;
-      if (/^(いいえ|いや|やめる|やめ|中止|no|NO)$/i.test(cleanText)) {
+      // 「やっぱりキャンセルするのやめる」のような中止は、完全一致だと拾えず
+      // CANCEL_RE の「キャンセ」に先に当たって取消メニューに進んでしまう。
+      // 日時を含まない中止表現は、取消語より先に中止として扱う
+      const isAbort = /^(いいえ|いや|やめる|やめ|中止|no|NO)$/i.test(cleanText) ||
+        (/やめ|中止|いらな|結構です|大丈夫です/.test(cleanText) &&
+          !parseDateTime(stripCancelKeyword(cleanText)));
+      if (isAbort) {
         pendingCancels.delete(userId);
         await reply(replyToken, '取消をやめました');
         return;
@@ -178,11 +184,18 @@ async function handleEvent(event) {
           await handleCancel(replyToken, userId, ctx, cleanText);
           return;
         }
+        // 取消語が無くても日時だけで言い直す人はいる。勝手に切り替えると
+        // 予約依頼を取消に反転させてしまうので、切り替えずに「その日時なら
+        // こう送ってください」と検出結果を提示する
+        const other = parseDateTime(stripCancelKeyword(cleanText));
         const wantsReserve = /予約|押さえ|取って|とって|空き|空いて/.test(cleanText);
         await reply(replyToken,
           (wantsReserve ? '先に取消の確認にお答えください。\n\n' : '') +
           st.confirm.label + ' を取り消しますか？（はい / いいえ）\n' +
-          '別の予約を取り消す場合は「取消 7/28 14時」のように送ってください');
+          (other && !(other.date === st.confirm.date && other.startTime === st.confirm.startTime)
+            ? '※ ' + other.date + ' ' + other.startTime + ' の取消でしたら「取消 ' +
+              other.date + ' ' + other.startTime + '」と送ってください'
+            : '別の予約を取り消す場合は「取消 7/28 14時」のように送ってください'));
         return;
       }
     }

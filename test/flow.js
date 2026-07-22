@@ -416,6 +416,39 @@ function check(label, cond, detail) {
   check('取消でも「予約はありません」と断定しない', !/予約はありません/.test(r18b), r18b);
   fakeSite.listUnreadable = false;
 
+  console.log('\n■ シナリオ19: 取消語なしの言い直しは切り替えず、送り方を教える（A1/A2）');
+  reset();
+  fakeSite.reservations = [
+    { date: farIso, time: '14:00~15:00', room: '6階 会議室' },
+    { date: farIso, time: '10:00~11:00', room: '4階 共用会議室' },
+  ];
+  await say(far.m + '/' + far.d + ' 14時をキャンセル');
+  clearLog();
+  await say('あ、' + far.m + '/' + far.d + ' 10時の方でした'); // 取消語なしの言い直し
+  const r19 = sent.reply.concat(sent.push).join('\n');
+  check('勝手に切り替えない（確認対象は14時のまま）', /14:00/.test(r19), r19);
+  check('言い直した10時の送り方を提示する', /10:00/.test(r19) && /取消/.test(r19), r19);
+  clearLog();
+  await say('取消 ' + far.m + '/' + far.d + ' 10時'); // 提示どおりに送る
+  await say('はい');
+  check('提示どおり送れば10時が消える',
+    fakeSite.reservations.length === 1 && fakeSite.reservations[0].time === '14:00~15:00',
+    JSON.stringify(fakeSite.reservations));
+
+  console.log('\n■ シナリオ20: 「キャンセルするのやめる」で取消メニューに進まない（A3）');
+  reset();
+  fakeSite.reservations = [
+    { date: farIso, time: '14:00~15:00', room: '6階 会議室' },
+    { date: farIso, time: '10:00~11:00', room: '4階 共用会議室' },
+  ];
+  await say(far.m + '/' + far.d + ' 14時をキャンセル');
+  clearLog();
+  await say('やっぱりキャンセルするのやめる');
+  const r20 = sent.reply.concat(sent.push).join('\n');
+  check('中止として扱う', /やめました/.test(r20), r20);
+  check('取消の一覧に進まない', !/どの予約を取り消しますか/.test(r20), r20);
+  check('予約は両方残る', fakeSite.reservations.length === 2, JSON.stringify(fakeSite.reservations));
+
   console.log('\n■ シナリオ5: 応答トークンが切れたときの push フォールバック');
   reset();
   fakeSite.reservations = [{ date: iso, time: '10:00~11:00', room: '6階 会議室' }];
