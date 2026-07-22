@@ -269,16 +269,26 @@ async function handleReserve(replyToken, userId, text) {
   // 5分後に自動キャンセル
   setTimeout(() => pendingConfirmations.delete(userId), 5 * 60 * 1000);
 
+  // 「4/28」のように年を書かずに過ぎた月日を送ると翌年と解釈される。
+  // 実際に2027年の予約が入ってしまった事故があるため、遠い日付は警告する
+  const daysAhead = Math.floor((jstToMs(date, startTime) - Date.now()) / (24 * 60 * 60 * 1000));
+  const farWarning = daysAhead > 90
+    ? `⚠️ ${date} は約${Math.round(daysAhead / 30)}ヶ月先です。年が正しいか確認してください`
+    : '';
+
   const otherRoom = selectedRoom.id === '42' ? room4 : room6;
   const msg = [
     `${selectedRoom.name} が空いています`,
     otherRoom ? `${otherRoom.name}: ${otherRoom.available ? '空き' : '埋まり'}` : '',
     `日時: ${date} ${startTime}-${endTime}`,
     `キャンセル期限: ${cancelDeadline}`,
+    farWarning,
     '',
     `${selectedRoom.name}を予約しますか？（OK / いいえ）`,
   ].filter(Boolean).join('\n');
 
+  // ここでは replyToken を「空き状況を確認中...」で使い切っているため push で送る。
+  // reply への一本化は無料枠の原因が確定してから行う
   await pushMessage(userId, msg);
 }
 

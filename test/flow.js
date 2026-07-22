@@ -160,6 +160,46 @@ function check(label, cond, detail) {
   await say('はい');
   check('「はい」で取消が実行された', fakeSite.reservations.length === 0, JSON.stringify(fakeSite.reservations));
 
+  console.log('\n■ シナリオ6: 実際の会話の再生（2026-07-22 のトーク）');
+  // 実機で起きたやりとり:
+  //   「4/28 16-17 キャンセル」→ 日時が消えて一覧提示
+  //   「4/28 16〜17」        → 取消のつもりが新規予約の提案になった
+  reset();
+  fakeSite.reservations = [
+    { date: '2026-07-10', time: '14:00~15:00', room: '6階 会議室' },
+    { date: '2027-04-28', time: '16:00~17:00', room: '6階 会議室' },
+  ];
+  await say('4/28 16-17 キャンセル');
+  const r6 = sent.reply.concat(sent.push).join('\n');
+  check('日時を保持して対象を特定した（一覧提示に落ちない）',
+    !/どの予約を取り消しますか/.test(r6), r6);
+  check('2027-04-28 の予約だけが取り消された',
+    fakeSite.reservations.length === 1 && fakeSite.reservations[0].date === '2026-07-10',
+    '残: ' + JSON.stringify(fakeSite.reservations) + ' / 応答: ' + r6);
+  check('新規予約の提案になっていない', !/予約しますか/.test(r6), r6);
+
+  console.log('\n■ シナリオ6c: 遠い日付は年の取り違えを警告する');
+  reset(); fakeSite.reservations = [];
+  await say('4/28 16-17'); // 過ぎた月日 → 翌年と解釈される
+  const warnMsg = sent.reply.concat(sent.push).join('\n');
+  check('翌年として解釈したことを警告した', /年が正しいか確認/.test(warnMsg), warnMsg);
+  check('確認前なので予約は入っていない', fakeSite.reservations.length === 0);
+  reset();
+  await say('いいえ');
+
+  console.log('\n■ シナリオ6b: 一覧提示になった場合でも番号で選べる');
+  reset();
+  fakeSite.reservations = [
+    { date: '2026-07-10', time: '14:00~15:00', room: '6階 会議室' },
+    { date: '2027-04-28', time: '16:00~17:00', room: '6階 会議室' },
+  ];
+  await say('キャンセルしたい'); // 日時なし
+  check('一覧が提示された', /どの予約を取り消しますか/.test(sent.reply.concat(sent.push).join('\n')));
+  await say('2');
+  check('番号選択で2件目が取り消された',
+    fakeSite.reservations.length === 1 && fakeSite.reservations[0].date === '2026-07-10',
+    JSON.stringify(fakeSite.reservations));
+
   console.log('\n■ シナリオ5: 応答トークンが切れたときの push フォールバック');
   reset();
   fakeSite.reservations = [{ date: iso, time: '10:00~11:00', room: '6階 会議室' }];
