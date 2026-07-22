@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node index.js",
-    "test": "node test/run.js candidate && node test/flow.js"
+    "test": "node test/run.js candidate && node test/flow.js && node test/reserve.js"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.87.0",

@@ -347,6 +347,41 @@ function check(label, cond, detail) {
     sent.reply.length === 0 && sent.push.length === 0,
     'reply=' + JSON.stringify(sent.reply) + ' push=' + JSON.stringify(sent.push));
 
+  // ---- 独立レビュー第2回が再現した状態機械の欠陥 ----
+
+  console.log('\n■ シナリオ15: 確認待ち中に別の予約へ言い直せる（N1）');
+  reset();
+  fakeSite.reservations = [
+    { date: farIso, time: '14:00~15:00', room: '6階 会議室' },
+    { date: farIso, time: '10:00~11:00', room: '4階 共用会議室' },
+  ];
+  await say(far.m + '/' + far.d + ' 14時をキャンセル');
+  clearLog();
+  await say('やっぱり' + far.m + '/' + far.d + ' 10時のを取消して'); // 言い直し
+  const r15 = sent.reply.concat(sent.push).join('\n');
+  check('言い直した10時の予約が確認対象になる', /10:00/.test(r15), r15);
+  await say('はい');
+  check('言い直す前の14時ではなく10時が消えた',
+    fakeSite.reservations.length === 1 && fakeSite.reservations[0].time === '14:00~15:00',
+    JSON.stringify(fakeSite.reservations));
+
+  console.log('\n■ シナリオ16: 別トークからの「はい」で取消が確定しない（N2）');
+  reset();
+  fakeSite.reservations = [{ date: farIso, time: '14:00~15:00', room: '6階 会議室' }];
+  await say(far.m + '/' + far.d + ' 14時をキャンセル'); // DMで確認待ちにする
+  clearLog();
+  await bot.handleEvent({ // 同じ人がグループで「はい」と発言
+    type: 'message',
+    message: { type: 'text', text: 'はい' },
+    source: { type: 'group', groupId: 'G_other', userId: currentUser },
+    replyToken: 'RTg' + (++tokenSeq),
+  });
+  check('グループの「はい」では取り消されない', fakeSite.reservations.length === 1,
+    JSON.stringify(fakeSite.reservations) + ' / ' + sent.reply.concat(sent.push).join(' | '));
+  await say('はい'); // 元のDMでなら確定できる
+  check('元のトークでは確定できる', fakeSite.reservations.length === 0,
+    JSON.stringify(fakeSite.reservations));
+
   console.log('\n■ シナリオ5: 応答トークンが切れたときの push フォールバック');
   reset();
   fakeSite.reservations = [{ date: iso, time: '10:00~11:00', room: '6階 会議室' }];

@@ -136,16 +136,19 @@ function resolveMonthDay(mo, day, todayMs) {
 }
 
 // ---------------------------------------------------------------- 時刻の抽出
-const AMPM_RE = /^(午前|午後|ごぜん|ごご|AM|PM|am|pm)/;
+// 時間帯語も午前/午後に倒す。「夕方4時」を04:00と読んで早朝を押さえていた
+const AMPM_RE = /^(午前中|午前|午後|ごぜん|ごご|AM|PM|am|pm|朝|昼過ぎ|昼|夕方|夕|夜|晩)/;
+const PM_RE = /午後|ごご|PM|pm|昼|夕|夜|晩/;
 const SEP_RE = /^\s*(?:から|カラ|より|〜|～|~|-|–|—|ー|to|TO)\s*/;
 const DUR_RE = /^\s*(\d{1,3})\s*(時間|分)\s*(半)?/;
 
 // 文字列先頭の時刻トークンを読む。{ h, mi, len, explicitAmPm } または null
-function readTime(s) {
+// allowBare: 午前/午後が明示されている等、裸の数字を時刻とみなす根拠があるとき true
+function readTime(s, allowBare) {
   let i = 0;
   let ampm = null;
   const a = s.match(AMPM_RE);
-  if (a) { ampm = /午後|ごご|PM|pm/.test(a[1]) ? 'pm' : 'am'; i += a[0].length; }
+  if (a) { ampm = PM_RE.test(a[1]) ? 'pm' : 'am'; i += a[0].length; }
   const ws = s.slice(i).match(/^\s*/)[0];
   i += ws.length;
   const rest = s.slice(i);
@@ -155,11 +158,15 @@ function readTime(s) {
   else if ((m = rest.match(/^(\d{1,2})\s*時\s*半/))) { h = +m[1]; mi = 30; }
   else if ((m = rest.match(/^(\d{1,2})\s*時\s*(\d{1,2})\s*分/))) { h = +m[1]; mi = +m[2]; }
   else if ((m = rest.match(/^(\d{1,2})\s*時/))) { h = +m[1]; mi = 0; }
-  else if ((m = rest.match(/^(\d{2})(\d{2})(?!\d)/))) { h = +m[1]; mi = +m[2]; }
-  else if ((m = rest.match(/^(\d)(\d{2})(?!\d)/))) { h = +m[1]; mi = +m[2]; }
-  // 裸の1〜2桁は時刻の根拠にしない。「第2会議室」「3件の議題」の数字を
-  // 開始時刻(02:00/03:00)として拾ってしまう事故があったため、
-  // 「時」「:」「4桁」のいずれかの根拠がある場合のみ時刻とみなす
+  // 4桁は「1400」形式だが、年号・内線・部屋番号にも当たる。
+  // 「2026年度予算会議を明日14時から」で 2026 を 20:26 と読み、
+  // 本物の時刻より先に見つかるため6時間ずれた枠を提案していた
+  else if ((m = rest.match(/^(\d{2})(\d{2})(?![\d年号室番線階人名月日会期])/))) { h = +m[1]; mi = +m[2]; }
+  else if ((m = rest.match(/^(\d)(\d{2})(?![\d年号室番線階人名月日会期])/))) { h = +m[1]; mi = +m[2]; }
+  // 裸の1〜2桁は原則として時刻の根拠にしない。「第2会議室」「3件の議題」の
+  // 数字を開始時刻(02:00/03:00)として拾ってしまう事故があったため。
+  // 午前/午後が明示されている場合だけ「午後2から4」のような省略形を許す
+  else if ((ampm || allowBare) && (m = rest.match(/^(\d{1,2})(?!\d)/))) { h = +m[1]; mi = 0; }
   else return null;
 
   if (ampm === 'pm' && h < 12) h += 12;
@@ -173,7 +180,9 @@ function readTime(s) {
 function findTime(s) {
   for (let i = 0; i < s.length; i++) {
     if (i > 0 && /\d/.test(s[i - 1])) continue; // 数字の途中から読み始めない
-    if (!/[\d午前後AaPp]/.test(s[i])) continue;
+    // 時刻トークンの開始になりうる文字。時間帯語を落とすと「夕方4時」の
+    // 夕方を読み飛ばして 04:00 になる
+    if (!/[\d午前後AaPp朝昼夕夜晩]/.test(s[i])) continue;
     const t = readTime(s.slice(i));
     if (t) return { t: t, index: i };
   }
@@ -196,7 +205,11 @@ function parseDateTime(text, nowMs) {
   // 「4階」「6F」「3人」を時刻として読まないよう先に除去する
   rest = rest.replace(/\d{1,2}\s*(?:階|かい|カイ)/g, ' ')
              .replace(/\d{1,2}\s*[fF](?![a-zA-Z])/g, ' ')
-             .replace(/\d{1,2}\s*(?:人|名)/g, ' ');
+             .replace(/\d{1,2}\s*(?:人|名)/g, ' ')
+             // 年号・内線・部屋番号を時刻として読まない
+             .replace(/\d{3,4}\s*年度?/g, ' ')
+             .replace(/内線\s*\d+/g, ' ')
+             .replace(/\d{2,4}\s*(?:会議室|号室|号|番)/g, ' ');
 
   const start = findTime(rest);
 
@@ -204,7 +217,7 @@ function parseDateTime(text, nowMs) {
   // しないが、「数字-数字」の並びは範囲指定としての根拠がある。
   // 実際の利用者が「4/28 16-17」と送ってくるため落とせない
   if (!start) {
-    const br = rest.match(/(?:^|[^\d:])(\d{1,2})\s*[-–—〜~]\s*(\d{1,2})(?!\d)/);
+    const br = rest.match(/(?:^|\s)(\d{1,2})\s*[-–—ー〜～~]\s*(\d{1,2})(?=\s|$)/);
     if (br && +br[1] <= 24 && +br[2] <= 24) {
       return finalize(+br[1], 0, +br[2], 0, null, null, d, nowMs);
     }
@@ -226,7 +239,7 @@ function parseDateTime(text, nowMs) {
       const total = sh * 60 + smi + add;
       eh = Math.floor(total / 60); emi = total % 60;
     } else {
-      const end = readTime(after);
+      const end = readTime(after, start.t.ampm !== null);
       if (end) { eh = end.h; emi = end.mi; endAmPm = end.ampm; }
     }
   }
@@ -261,6 +274,8 @@ function finalize(sh, smi, eh, emi, startAmPm, endAmPm, d, nowMs) {
   const todayMs = jstMidnight(today.y, today.mo, today.d);
   if (d.dateMs < todayMs) return null;
   if (d.dateMs > todayMs + 366 * DAY_MS) return null;
+  // 当日の場合、すでに過ぎた時刻は受け付けない（キャンセル期限も過去になる）
+  if (d.dateMs + startMin * 60 * 1000 < nowMs) return null;
 
   return {
     date: msToDateStr(d.dateMs),

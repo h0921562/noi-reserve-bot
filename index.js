@@ -41,7 +41,7 @@ app.get('/', (req, res) => res.send('OK'));
 
 // デプロイ確認用。どのビルドが動いているかを外から判別するために置く。
 // 秘密情報は返さない。TZ は日付計算の前提確認に使う
-const BUILD = '2026-07-22-critic-fixes-2';
+const BUILD = '2026-07-22-critic-r2';
 app.get('/version', (req, res) => res.json({
   build: BUILD,
   commit: process.env.RENDER_GIT_COMMIT || null,
@@ -56,10 +56,28 @@ const pendingConfirmations = new Map();
 // 取消の選択待ち・確認待ち状態（userId -> { list } または { confirm }）
 const pendingCancels = new Map();
 
-function setPendingCancel(userId, state) {
-  pendingCancels.set(userId, state);
-  setTimeout(function () { pendingCancels.delete(userId); }, 5 * 60 * 1000);
+// 会話状態をどのトークで作ったかを表す。userId だけで持つと、DMで始めた
+// 取消の確認に、グループでの何気ない「はい」が答えてしまう
+function ctxOf(event) {
+  const s = event.source || {};
+  return (s.groupId || s.roomId || 'dm') + ':' + (s.userId || '');
 }
+
+let cancelStateGen = 0;
+function setPendingCancel(userId, ctx, state) {
+  state.ctx = ctx;
+  const gen = (state.gen = ++cancelStateGen);
+  pendingCancels.set(userId, state);
+  // 状態を更新するたびにタイマーが積み上がる。世代を照合しないと、
+  // 古いタイマーが数十秒前に作られた新しい状態を消してしまう
+  setTimeout(function () {
+    const cur = pendingCancels.get(userId);
+    if (cur && cur.gen === gen) pendingCancels.delete(userId);
+  }, 5 * 60 * 1000);
+}
+
+// 取消の意図を示す語。ルータと「確認待ち中の言い直し」判定で共有する
+const CANCEL_RE = /(?:取消|取り消|キャンセ[ルるりらろっ]*|とりけし|とりやめ|取りやめ|やめたい|消して|消しとい|消去)/;
 
 async function handleEvent(event) {
   if (event.type !== 'message') return;
@@ -93,10 +111,17 @@ async function handleEvent(event) {
   const userId = event.source.userId;
   const replyToken = event.replyToken;
 
+  const ctx = ctxOf(event);
+  // 状態は「同じトークで作られたもの」だけを使う。別トークからの返答は無関係とみなす
+  const cancelState = pendingCancels.get(userId);
+  const confirmState = pendingConfirmations.get(userId);
+  const hasCancelState = !!(cancelState && cancelState.ctx === ctx);
+  const hasConfirmState = !!(confirmState && confirmState.ctx === ctx);
+
   // グループの場合はメンションされてるかチェック（確認待ちユーザーは除く）
   if (event.source.type === 'group' || event.source.type === 'room') {
     const mention = event.message.mention;
-    const waiting = pendingConfirmations.has(userId) || pendingCancels.has(userId);
+    const waiting = hasConfirmState || hasCancelState;
     const mentionees = (mention && Array.isArray(mention.mentionees)) ? mention.mentionees : [];
     // メンション先がbot自身かを見る。以前は誰宛でも起動していたため、
     // 同僚宛の雑談で予約提案が立ち上がり push 枠も消費していた。
@@ -104,7 +129,9 @@ async function handleEvent(event) {
     const toBot = mentionees.some(function (m) { return m.isSelf === true || m.type === 'all'; });
     const toOthersOnly = mentionees.length > 0 && !toBot &&
       mentionees.every(function (m) { return m.isSelf === false; });
-    if (toOthersOnly && !waiting) return;
+    // 他人宛は待機中でも無視する。待機中を素通りさせると、実行寸前の利用者が
+    // 同僚に返した「はい」で取消が確定してしまう
+    if (toOthersOnly) return;
     if (!mention && !text.startsWith('@') && !waiting) return;
   }
 
@@ -113,8 +140,8 @@ async function handleEvent(event) {
 
   try {
     // 取消の選択待ち・確認待ちの処理（予約の確認待ちより先に見る）
-    if (pendingCancels.has(userId)) {
-      const st = pendingCancels.get(userId);
+    if (hasCancelState) {
+      const st = cancelState;
       if (/^(いいえ|いや|やめる|やめ|中止|no|NO)$/i.test(cleanText)) {
         pendingCancels.delete(userId);
         await reply(replyToken, '取消をやめました');
@@ -128,7 +155,7 @@ async function handleEvent(event) {
         if (n >= 1 && n <= st.list.length) {
           const r = st.list[n - 1];
           // 選択後も即実行しない。期限超過なら課金されるため確認を挟む
-          await askCancelConfirm(replyToken, userId, r.date, (r.time || '').split('~')[0],
+          await askCancelConfirm(replyToken, userId, ctx, r.date, (r.time || '').split('~')[0],
             r.date + ' ' + r.time + ' ' + r.room, r.room);
           return;
         }
@@ -143,15 +170,25 @@ async function handleEvent(event) {
             st.confirm.label, st.confirm.room);
           return;
         }
-        await reply(replyToken, st.confirm.label + ' を取り消しますか？（はい / いいえ）');
+        // 別の予約の取消を言い直した場合はやり直す。以前は「はい」以外を
+        // すべて同じ確認の再掲に落としていたため、訂正が黙って無視され、
+        // 言い直す前の予約が消えていた
+        if (CANCEL_RE.test(cleanText) || parseDateTime(stripCancelKeyword(cleanText))) {
+          pendingCancels.delete(userId);
+          await handleCancel(replyToken, userId, ctx, cleanText);
+          return;
+        }
+        await reply(replyToken,
+          st.confirm.label + ' を取り消しますか？（はい / いいえ）\n' +
+          '別の予約を取り消す場合は、その日時を送ってください');
         return;
       }
     }
 
     // 確認待ち状態の処理
-    if (pendingConfirmations.has(userId)) {
+    if (hasConfirmState) {
       if (['ok', 'OK', 'はい', 'うん', 'おk', 'yes'].includes(cleanText)) {
-        const info = pendingConfirmations.get(userId);
+        const info = confirmState;
         pendingConfirmations.delete(userId);
         await reply(replyToken, '予約中...');
 
@@ -170,7 +207,7 @@ async function handleEvent(event) {
         }
         return;
       } else if (/(?:^[4４]$|4\s*(?:階|かい|カイ|f|F)|よん\s*(?:階|かい|カイ)|よんかい|４\s*(?:階|かい|カイ|f|F))/.test(cleanText)) {
-        const info = pendingConfirmations.get(userId);
+        const info = confirmState;
         if (info.roomId === '25') {
           await reply(replyToken, 'すでに4階で提案しています。予約しますか？（OK / いいえ）');
           return;
@@ -188,7 +225,7 @@ async function handleEvent(event) {
         }
         return;
       } else if (/(?:^[6６]$|6\s*(?:階|かい|カイ|f|F)|ろく\s*(?:階|かい|カイ)|ろっかい|ろくかい|６\s*(?:階|かい|カイ|f|F))/.test(cleanText)) {
-        const info = pendingConfirmations.get(userId);
+        const info = confirmState;
         if (info.roomId === '42') {
           await reply(replyToken, 'すでに6階で提案しています。予約しますか？（OK / いいえ）');
           return;
@@ -211,7 +248,7 @@ async function handleEvent(event) {
         await reply(replyToken, 'キャンセルしました');
         return;
       } else {
-        const info = pendingConfirmations.get(userId);
+        const info = confirmState;
         await reply(replyToken, info.roomName + ' / ' + info.date + ' ' + info.startTime + '-' + info.endTime + '\n予約しますか？（OK / いいえ）');
         return;
       }
@@ -228,12 +265,12 @@ async function handleEvent(event) {
     // 「議事録の消し込みの件」のような業務語で取消と誤判定され、
     // 同じ時間帯の既存予約が消える事故があったため
     } else if (/(?:取消|取り消|キャンセ[ルるりらろっ]*|とりけし|とりやめ|取りやめ|やめたい|消して|消しとい|消去)/.test(cleanText)) {
-      await handleCancel(replyToken, userId, cleanText);
+      await handleCancel(replyToken, userId, ctx, cleanText);
     } else if (cleanText.startsWith('空き')) {
       await handleCheckOnly(replyToken, userId, cleanText);
     } else {
       // 予約リクエスト（日時パース）
-      await handleReserve(replyToken, userId, cleanText);
+      await handleReserve(replyToken, userId, ctx, cleanText);
     }
   } catch (err) {
     console.error('Error handling event:', err);
@@ -245,7 +282,7 @@ async function handleEvent(event) {
 }
 
 // 予約リクエスト処理
-async function handleReserve(replyToken, userId, text) {
+async function handleReserve(replyToken, userId, ctx, text) {
   const parsed = parseDateTime(text);
   if (!parsed) {
     await reply(replyToken, '日時を認識できませんでした。\n例: 4/10 14:00-15:00');
@@ -288,6 +325,7 @@ async function handleReserve(replyToken, userId, text) {
 
   // 確認待ち状態を保存
   pendingConfirmations.set(userId, {
+    ctx,
     date,
     startTime,
     endTime,
@@ -364,7 +402,7 @@ async function handleList(replyToken, userId) {
 }
 
 // キャンセル処理
-async function handleCancel(replyToken, userId, text) {
+async function handleCancel(replyToken, userId, ctx, text) {
   // 取消語を「その場で」除去する。旧実装は取消語より前を全部削っていたため、
   // 「7/22 14時をキャンセル」のように日時が先に来る自然な語順で日時ごと消えていた。
   const cleaned = stripCancelKeyword(text);
@@ -381,7 +419,7 @@ async function handleCancel(replyToken, userId, text) {
     // botが対象を推測している状態であり、取消は不可逆で課金もありうる
     if (reservations.length === 1) {
       const r = reservations[0];
-      await askCancelConfirm(replyToken, userId, r.date, (r.time || '').split('~')[0],
+      await askCancelConfirm(replyToken, userId, ctx, r.date, (r.time || '').split('~')[0],
         r.date + ' ' + r.time + ' ' + r.room);
       return;
     }
@@ -389,7 +427,7 @@ async function handleCancel(replyToken, userId, text) {
     const lines = reservations.map(function (r, i) {
       return (i + 1) + '. ' + r.date + ' ' + r.time + ' ' + r.room;
     });
-    setPendingCancel(userId, { list: reservations });
+    setPendingCancel(userId, ctx, { list: reservations });
     await sendResult(replyToken, userId,
       'どの予約を取り消しますか？\n\n' + lines.join('\n') + '\n\n番号を送ってください（やめる場合は「いいえ」）');
     return;
@@ -417,7 +455,7 @@ async function handleCancel(replyToken, userId, text) {
   }
   if (matches.length > 1) {
     const lines = matches.map(function (r, i) { return (i + 1) + '. ' + r.date + ' ' + r.time + ' ' + r.room; });
-    setPendingCancel(userId, { list: matches });
+    setPendingCancel(userId, ctx, { list: matches });
     await sendResult(replyToken, userId,
       'その時間に複数の予約があります。どれを取り消しますか？\n\n' + lines.join('\n') +
       '\n\n番号を送ってください（やめる場合は「いいえ」）');
@@ -425,16 +463,16 @@ async function handleCancel(replyToken, userId, text) {
   }
 
   const r = matches[0];
-  await askCancelConfirm(replyToken, userId, r.date, (r.time || '').split('~')[0],
+  await askCancelConfirm(replyToken, userId, ctx, r.date, (r.time || '').split('~')[0],
     r.date + ' ' + r.time + ' ' + r.room, r.room);
 }
 
 // 取消前の確認。すべての取消経路をここに集約する。
 // 期限チェックもここで一度だけ行い、経路によって確認が抜ける状態を作らない
-async function askCancelConfirm(replyToken, userId, date, startTime, label, room) {
+async function askCancelConfirm(replyToken, userId, ctx, date, startTime, label, room) {
   const deadlineMs = jstToMs(date, startTime) - 2 * 60 * 60 * 1000;
   const late = Date.now() > deadlineMs;
-  setPendingCancel(userId, { confirm: { date: date, startTime: startTime, label: label, room: room } });
+  setPendingCancel(userId, ctx, { confirm: { date: date, startTime: startTime, label: label, room: room } });
   await sendResult(replyToken, userId,
     (late
       ? 'キャンセル期限（開始2時間前: ' + formatDateTime(deadlineMs) + '）を過ぎています。\n取り消すと料金が発生します。\n\n'

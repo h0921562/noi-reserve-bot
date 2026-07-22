@@ -2,6 +2,9 @@ const axios = require('axios');
 const cheerio = require('cheerio');
 
 const BASE_URL = 'https://sd-reservsys.jp';
+
+// 会議室ID → 予約一覧に出る名称。登録結果の照合に使う
+const ROOM_NAMES = { '42': '6階 会議室', '25': '4階 共用会議室' };
 const LOGIN_ID = process.env.RESERVE_LOGIN_ID;
 const LOGIN_PW = process.env.RESERVE_LOGIN_PW;
 
@@ -142,17 +145,25 @@ async function makeReservation(date, startTime, endTime, roomId) {
   }
 
   // \u767b\u9332POST\u306e\u7d50\u679c\u3092\u898b\u305a\u306b\u6210\u529f\u3092\u8fd4\u3059\u3068\u3001\u67a0\u304c\u57cb\u307e\u3063\u3066\u3044\u3066\u62d2\u5426\u3055\u308c\u3066\u3082
-  // bot\u304c\u300c\u4e88\u7d04\u5b8c\u4e86\u300d\u3068\u65ad\u8a00\u3057\u3066\u3057\u307e\u3046\u3002\u4e00\u89a7\u306b\u5b9f\u969b\u306b\u8f09\u3063\u305f\u304b\u3092\u78ba\u8a8d\u3059\u308b
+  // bot\u304c\u300c\u4e88\u7d04\u5b8c\u4e86\u300d\u3068\u65ad\u8a00\u3057\u3066\u3057\u307e\u3046\u3002\u4e00\u89a7\u306b\u5b9f\u969b\u306b\u8f09\u3063\u305f\u304b\u3092\u78ba\u8a8d\u3059\u308b\u3002
+  // \u65e5\u4ed8\u3068\u958b\u59cb\u6642\u523b\u3060\u3051\u3067\u7167\u5408\u3059\u308b\u3068\u3001\u540c\u3058\u6642\u9593\u306b\u5225\u306e\u968e\u306e\u4e88\u7d04\u304c\u3042\u308b\u3068\u304d
+  // \u305d\u308c\u3092\u81ea\u5206\u306e\u6210\u529f\u3068\u8aa4\u8a8d\u3057\u3001\u4ed6\u5ba4\u306e\u30d1\u30b9\u30ef\u30fc\u30c9\u3092\u8fd4\u3057\u3066\u3057\u307e\u3046
+  var roomName = ROOM_NAMES[roomId];
   var after = parseReservationList(await getReservationPage());
-  var created = after.some(function(r) {
-    return r.rsr_date === date && (r.start_time || '').indexOf(startTime) === 0;
+  if (after === null) {
+    return { success: false, error: '予約結果を確認できませんでした。予約一覧でご確認ください' };
+  }
+  var created = after.filter(function(r) {
+    return r.rsr_date === date &&
+      (r.start_time || '').indexOf(startTime) === 0 &&
+      (r.end_time || '').indexOf(endTime) === 0 &&
+      (!roomName || r.room_name === roomName);
   });
-  if (!created) {
+  if (created.length === 0) {
     return { success: false, error: '\u4e88\u7d04\u30b5\u30a4\u30c8\u304c\u767b\u9332\u3092\u53d7\u3051\u4ed8\u3051\u307e\u305b\u3093\u3067\u3057\u305f\uff08\u67a0\u304c\u57cb\u307e\u3063\u3066\u3044\u308b\u53ef\u80fd\u6027\uff09' };
   }
 
-  var password = await getLatestPassword(date, startTime);
-  return { success: true, password: password };
+  return { success: true, password: created[0].e_key || null };
 }
 
 async function getLatestPassword(date, startTime) {
@@ -182,17 +193,18 @@ async function getReservationPage() {
   return r.data;
 }
 
+// パースできなかった場合は null、予約が無い場合は [] を返す。
+// 両方を [] にすると「読めなかった」を「予約が無い＝消えた」と誤読し、
+// 取消の確認が失敗を成功として数えてしまう
 function parseReservationList(html) {
   var match = html.match(/const\s+reservationList\s*=\s*(\[[\s\S]*?\]);/);
-  if (match) {
-    try { return JSON.parse(match[1]); } catch(e) {}
-  }
-  return [];
+  if (!match) return null;
+  try { return JSON.parse(match[1]); } catch(e) { return null; }
 }
 
 async function getReservations() {
   var html = await getReservationPage();
-  var list = parseReservationList(html);
+  var list = parseReservationList(html) || [];
   return list.map(function(r) {
     return {
       rsr_id: r.rsr_id,
@@ -211,6 +223,9 @@ async function getReservations() {
 async function cancelReservation(date, startTime, roomName) {
   var html = await getReservationPage();
   var list = parseReservationList(html);
+  if (list === null) {
+    return { success: false, error: '予約一覧を読み取れませんでした。時間をおいて試してください' };
+  }
   var target = null;
   for (var i = 0; i < list.length; i++) {
     var r = list[i];
@@ -244,8 +259,15 @@ async function cancelReservation(date, startTime, roomName) {
   }
 
   // POST\u306e\u30ec\u30b9\u30dd\u30f3\u30b9\u3092\u898b\u305a\u306b\u6210\u529f\u3092\u8fd4\u3059\u3068\u3001\u30b5\u30a4\u30c8\u304c\u671f\u9650\u5207\u308c\u7b49\u3067\u62d2\u5426\u3057\u3066\u3082
-  // bot\u304c\u300c\u53d6\u308a\u6d88\u3057\u307e\u3057\u305f\u300d\u3068\u65ad\u8a00\u3057\u3066\u3057\u307e\u3046\u3002\u4e00\u89a7\u3092\u8aad\u307f\u76f4\u3057\u3066\u5b9f\u969b\u306b\u6d88\u3048\u305f\u304b\u78ba\u8a8d\u3059\u308b
+  // bot\u304c\u300c\u53d6\u308a\u6d88\u3057\u307e\u3057\u305f\u300d\u3068\u65ad\u8a00\u3057\u3066\u3057\u307e\u3046\u3002\u4e00\u89a7\u3092\u8aad\u307f\u76f4\u3057\u3066\u5b9f\u969b\u306b\u6d88\u3048\u305f\u304b\u78ba\u8a8d\u3059\u308b\u3002
+  //
+  // \u305f\u3060\u3057 parseReservationList \u306f\u30d1\u30fc\u30b9\u5931\u6557\u30fb\u30ed\u30b0\u30a4\u30f3\u5207\u308c\u3067\u3082\u9ed9\u3063\u3066 [] \u3092\u8fd4\u3059\u3002
+  // \u7a7a\u914d\u5217\u3092\u300c\u6d88\u3048\u305f\u300d\u3068\u8aad\u3080\u3068\u3001\u691c\u8a3c\u306e\u5931\u6557\u3092\u6210\u529f\u3068\u3057\u3066\u6570\u3048\u308b\u3053\u3068\u306b\u306a\u308b\u305f\u3081\u3001
+  // \u78ba\u8a8d\u3067\u304d\u306a\u304b\u3063\u305f\u5834\u5408\u306f\u5931\u6557\u5074\u306b\u5012\u3059\uff08\u30d5\u30a7\u30a4\u30eb\u30af\u30ed\u30fc\u30ba\uff09
   var after = parseReservationList(await getReservationPage());
+  if (after === null) {
+    return { success: false, error: '\u53d6\u6d88\u7d50\u679c\u3092\u78ba\u8a8d\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f\u3002\u4e88\u7d04\u4e00\u89a7\u3067\u3054\u78ba\u8a8d\u304f\u3060\u3055\u3044' };
+  }
   var stillThere = after.some(function(r) { return r.rsr_id === target.rsr_id; });
   if (stillThere) {
     return { success: false, error: '\u4e88\u7d04\u30b5\u30a4\u30c8\u304c\u53d6\u6d88\u3092\u53d7\u3051\u4ed8\u3051\u307e\u305b\u3093\u3067\u3057\u305f\uff08\u671f\u9650\u5207\u308c\u306e\u53ef\u80fd\u6027\uff09' };
